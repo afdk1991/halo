@@ -6,7 +6,10 @@ data:
   user: |
     {
       "allowRegistration": false,
-      "defaultRole": ""
+      "mustVerifyEmailOnRegistration": false,
+      "defaultRole": "guest",
+      "avatarPolicy": "default-policy",
+      "ucAttachmentPolicy": "default-policy"
     }
   theme: |
     {
@@ -26,9 +29,33 @@ data:
     }
   post: |
     {
-      "review": false
+      "review": false,
+      "postPageSize": 10,
+      "archivePageSize": 10,
+      "categoryPageSize": 10,
+      "tagPageSize": 10,
+      "slugGenerationStrategy": "generateByTitle",
+      "attachmentPolicyName": "default-policy"
+    }
+  comment: |
+    {
+      "enable": true,
+      "requireReviewForNew": true,
+      "systemUserOnly": true
     }
   menu: |
     {
       "primary": "primary"
+    }
+  extensionPointEnabled: |
+    {
+      "search-engine": ["search-engine-lucene"]
+    }
+  authProvider: |
+    {
+      "states": [{
+          "name": "local",
+          "enabled": true,
+          "priority": 0
+      }]
     }

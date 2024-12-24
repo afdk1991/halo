@@ -15,14 +15,17 @@ spring:
         use-last-modified: false
 
 halo:
+  security:
+    basic-auth:
+      disabled: false
   console:
     proxy:
       endpoint: http://localhost:3000/
       enabled: true
-  security:
-    initializer:
-      super-admin-username: admin
-      super-admin-password: admin
+  uc:
+    proxy:
+      endpoint: http://localhost:4000/
+      enabled: true
   plugin:
     runtime-mode: development # development, deployment
   work-dir: ${user.home}/halo2-dev
@@ -31,8 +34,11 @@ logging:
     run.halo.app: DEBUG
     org.springframework.boot.autoconfigure.web.reactive.error.AbstractErrorWebExceptionHandler: DEBUG
 springdoc:
+  cache:
+    disabled: true
   api-docs:
     enabled: true
+    version: OPENAPI_3_0
   swagger-ui:
     enabled: true
   show-actuator: true

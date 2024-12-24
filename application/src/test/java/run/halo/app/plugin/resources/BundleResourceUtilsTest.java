@@ -1,9 +1,9 @@
 package run.halo.app.plugin.resources;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.when;
 
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.pf4j.PluginClassLoader;
 import org.pf4j.PluginWrapper;
 import org.springframework.core.io.Resource;
+import run.halo.app.infra.exception.AccessDeniedException;
 import run.halo.app.plugin.HaloPluginManager;
 
 /**
@@ -34,33 +35,13 @@ class BundleResourceUtilsTest {
     void setUp() throws MalformedURLException {
         PluginWrapper pluginWrapper = Mockito.mock(PluginWrapper.class);
         PluginClassLoader pluginClassLoader = Mockito.mock(PluginClassLoader.class);
-        when(pluginWrapper.getPluginClassLoader()).thenReturn(pluginClassLoader);
+        lenient().when(pluginWrapper.getPluginClassLoader()).thenReturn(pluginClassLoader);
         lenient().when(pluginManager.getPlugin(eq("fake-plugin"))).thenReturn(pluginWrapper);
 
         lenient().when(pluginClassLoader.getResource(eq("console/main.js"))).thenReturn(
             new URL("file://console/main.js"));
         lenient().when(pluginClassLoader.getResource(eq("console/style.css"))).thenReturn(
             new URL("file://console/style.css"));
-    }
-
-    @Test
-    void getCssBundlePath() {
-        String cssBundlePath =
-            BundleResourceUtils.getCssBundlePath(pluginManager, "nothing-plugin");
-        assertThat(cssBundlePath).isNull();
-
-        cssBundlePath = BundleResourceUtils.getCssBundlePath(pluginManager, "fake-plugin");
-        assertThat(cssBundlePath).isEqualTo("/plugins/fake-plugin/assets/console/style.css");
-    }
-
-    @Test
-    void getJsBundlePath() {
-        String jsBundlePath =
-            BundleResourceUtils.getJsBundlePath(pluginManager, "nothing-plugin");
-        assertThat(jsBundlePath).isNull();
-
-        jsBundlePath = BundleResourceUtils.getJsBundlePath(pluginManager, "fake-plugin");
-        assertThat(jsBundlePath).isEqualTo("/plugins/fake-plugin/assets/console/main.js");
     }
 
     @Test
@@ -77,5 +58,10 @@ class BundleResourceUtilsTest {
         jsBundleResource =
             BundleResourceUtils.getJsBundleResource(pluginManager, "nothing-plugin", "main.js");
         assertThat(jsBundleResource).isNull();
+
+        assertThatThrownBy(() -> {
+            BundleResourceUtils.getJsBundleResource(pluginManager, "fake-plugin",
+                "../test/main.js");
+        }).isInstanceOf(AccessDeniedException.class);
     }
 }

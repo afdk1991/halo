@@ -6,6 +6,7 @@ import java.util.Set;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.server.PathContainer;
 import org.springframework.http.server.reactive.ServerHttpRequest;
+import run.halo.app.infra.console.WebSocketUtils;
 
 /**
  * Creates {@link RequestInfo} from {@link ServerHttpRequest}.
@@ -57,6 +58,8 @@ public class RequestInfoFactory {
      * /api/{version}/namespaces/{namespace}
      * /api/{version}/namespaces/{namespace}/{resource}
      * /api/{version}/namespaces/{namespace}/{resource}/{resourceName}
+     * /api/{version}/userspaces/{userspace}/{resource}
+     * /api/{version}/userspaces/{userspace}/{resource}/{resourceName}
      * /api/{version}/{resource}
      * /api/{version}/{resource}/{resourceName}
      * </pre>
@@ -91,7 +94,7 @@ public class RequestInfoFactory {
         RequestInfo requestInfo =
             new RequestInfo(false, path.value(), request.getMethod().name().toLowerCase());
 
-        String[] currentParts = splitPath(request.getPath().value());
+        String[] currentParts = splitPath(path.value());
 
         if (currentParts.length < 3) {
             // return a non-resource request
@@ -153,7 +156,18 @@ public class RequestInfoFactory {
                     currentParts = Arrays.copyOfRange(currentParts, 2, currentParts.length);
                 }
             }
+        } else if ("userspaces".equals(currentParts[0])) {
+            if (currentParts.length > 1) {
+                requestInfo.userspace = currentParts[1];
+
+                // if there is another step after the userspace name
+                // move currentParts to include it as a resource in its own right
+                if (currentParts.length > 2) {
+                    currentParts = Arrays.copyOfRange(currentParts, 2, currentParts.length);
+                }
+            }
         } else {
+            requestInfo.userspace = "";
             requestInfo.namespace = "";
         }
 
@@ -186,7 +200,7 @@ public class RequestInfoFactory {
 
         // if there's no name on the request and we thought it was a get before, then the actual
         // verb is a list or a watch
-        if (requestInfo.name.length() == 0 && "get".equals(requestInfo.verb)) {
+        if (requestInfo.name.isEmpty() && "get".equals(requestInfo.verb)) {
             var watch = request.getQueryParams().getFirst("watch");
             if (Boolean.parseBoolean(watch)) {
                 requestInfo.verb = "watch";
@@ -201,6 +215,10 @@ public class RequestInfoFactory {
             if (Boolean.parseBoolean(deleteAll)) {
                 requestInfo.verb = "deletecollection";
             }
+        }
+        if ("list".equals(requestInfo.verb)
+            && WebSocketUtils.isWebSocketUpgrade(request.getHeaders())) {
+            requestInfo.verb = "watch";
         }
         return requestInfo;
     }

@@ -3,8 +3,8 @@ package run.halo.app.extension.router;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -14,11 +14,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.reactive.function.server.MockServerRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.reactive.function.server.EntityResponse;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import run.halo.app.extension.FakeExtension;
+import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.ListResult;
 import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.extension.Scheme;
@@ -41,10 +44,13 @@ class ExtensionListHandlerTest {
     void shouldHandleCorrectly() {
         var scheme = Scheme.buildFromType(FakeExtension.class);
         var listHandler = new ExtensionListHandler(scheme, client);
-        var serverRequest = MockServerRequest.builder().build();
-        final var fake = new FakeExtension();
-        var fakeListResult = new ListResult<>(0, 0, 1, List.of(fake));
-        when(client.list(same(FakeExtension.class), any(), any(), anyInt(), anyInt()))
+        var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/fake")
+            .queryParam("sort", "metadata.name,desc"));
+        var serverRequest = MockServerRequest.builder().exchange(exchange).build();
+        final var fake01 = FakeExtension.createFake("fake01");
+        final var fake02 = FakeExtension.createFake("fake02");
+        var fakeListResult = new ListResult<>(0, 0, 2, List.of(fake01, fake02));
+        when(client.listBy(same(FakeExtension.class), any(ListOptions.class), any()))
             .thenReturn(Mono.just(fakeListResult));
 
         var responseMono = listHandler.handle(serverRequest);
@@ -57,6 +63,7 @@ class ExtensionListHandlerTest {
                 assertEquals(fakeListResult, ((EntityResponse<?>) response).entity());
             })
             .verifyComplete();
+        verify(client).listBy(same(FakeExtension.class), any(ListOptions.class), any());
     }
 
 }

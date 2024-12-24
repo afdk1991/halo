@@ -61,10 +61,11 @@ public class Plugin extends AbstractExtension {
          *
          * @see <a href="semver.org">semantic version</a>
          */
-        @Schema(required = true, pattern = "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-("
-            + "(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\."
-            + "(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\"
-            + ".[0-9a-zA-Z-]+)*))?$")
+        @Schema(requiredMode = REQUIRED,
+            pattern = "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-("
+                + "(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\."
+                + "(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\"
+                + ".[0-9a-zA-Z-]+)*))?$")
         private String version;
 
         private PluginAuthor author;
@@ -74,6 +75,10 @@ public class Plugin extends AbstractExtension {
         private Map<String, String> pluginDependencies = new HashMap<>(4);
 
         private String homepage;
+
+        private String repo;
+
+        private String issues;
 
         private String description;
 
@@ -94,6 +99,10 @@ public class Plugin extends AbstractExtension {
         private String configMapName;
     }
 
+    /**
+     * In the future, we may consider using {@link run.halo.app.infra.model.License} instead of it.
+     * But now, replace it will lead to incompatibility with downstream.
+     */
     @Data
     public static class License {
         private String name;
@@ -103,11 +112,13 @@ public class Plugin extends AbstractExtension {
     @Data
     public static class PluginStatus {
 
-        private PluginState phase;
+        private Phase phase;
 
         private ConditionList conditions;
 
         private Instant lastStartTime;
+
+        private PluginState lastProbeState;
 
         private String entry;
 
@@ -127,6 +138,20 @@ public class Plugin extends AbstractExtension {
         }
     }
 
+    public enum Phase {
+        PENDING,
+        STARTING,
+        CREATED,
+        DISABLING,
+        DISABLED,
+        RESOLVED,
+        STARTED,
+        STOPPED,
+        FAILED,
+        UNKNOWN,
+        ;
+    }
+
     @Data
     @ToString
     public static class PluginAuthor {
@@ -135,10 +160,5 @@ public class Plugin extends AbstractExtension {
         private String name;
 
         private String website;
-    }
-
-    @JsonIgnore
-    public String generateFileName() {
-        return String.format("%s-%s.jar", getMetadata().getName(), spec.getVersion());
     }
 }

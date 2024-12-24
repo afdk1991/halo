@@ -1,16 +1,17 @@
 package run.halo.app.extension;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import lombok.Data;
-import net.bytebuddy.ByteBuddy;
-import net.bytebuddy.description.type.TypeDescription;
 import org.springframework.util.Assert;
 import run.halo.app.infra.utils.GenericClassUtils;
 
@@ -18,17 +19,17 @@ import run.halo.app.infra.utils.GenericClassUtils;
 public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
 
     @Schema(description = "Page number, starts from 1. If not set or equal to 0, it means no "
-        + "pagination.", required = true)
+        + "pagination.", requiredMode = REQUIRED)
     private final int page;
 
     @Schema(description = "Size of each page. If not set or equal to 0, it means no pagination.",
-        required = true)
+        requiredMode = REQUIRED)
     private final int size;
 
-    @Schema(description = "Total elements.", required = true)
+    @Schema(description = "Total elements.", requiredMode = REQUIRED)
     private final long total;
 
-    @Schema(description = "A chunk of items.", required = true)
+    @Schema(description = "A chunk of items.", requiredMode = REQUIRED)
     private final List<T> items;
 
     public ListResult(int page, int size, long total, List<T> items) {
@@ -52,17 +53,20 @@ public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
         this(0, 0, items.size(), items);
     }
 
-    @Schema(description = "Indicates whether current page is the first page.", required = true)
+    @Schema(description = "Indicates whether current page is the first page.",
+        requiredMode = REQUIRED)
     public boolean isFirst() {
         return !hasPrevious();
     }
 
-    @Schema(description = "Indicates whether current page is the last page.", required = true)
+    @Schema(description = "Indicates whether current page is the last page.",
+        requiredMode = REQUIRED)
     public boolean isLast() {
         return !hasNext();
     }
 
-    @Schema(description = "Indicates whether current page has previous page.", required = true)
+    @Schema(description = "Indicates whether current page has previous page.",
+        requiredMode = REQUIRED)
     @JsonProperty("hasNext")
     public boolean hasNext() {
         if (page <= 0) {
@@ -71,7 +75,8 @@ public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
         return page < getTotalPages();
     }
 
-    @Schema(description = "Indicates whether current page has previous page.", required = true)
+    @Schema(description = "Indicates whether current page has previous page.",
+        requiredMode = REQUIRED)
     @JsonProperty("hasPrevious")
     public boolean hasPrevious() {
         return page > 1;
@@ -82,7 +87,7 @@ public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
         return items.iterator();
     }
 
-    @Schema(description = "Indicates total pages.", required = true)
+    @Schema(description = "Indicates total pages.", requiredMode = REQUIRED)
     @JsonProperty("totalPages")
     public long getTotalPages() {
         return size == 0 ? 1 : (total + size - 1) / size;
@@ -96,15 +101,12 @@ public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
      * @return generic ListResult class.
      */
     public static Class<?> generateGenericClass(Scheme scheme) {
-        var generic =
-            TypeDescription.Generic.Builder.parameterizedType(ListResult.class, scheme.type())
-                .build();
-        return new ByteBuddy()
-            .subclass(generic)
-            .name(scheme.groupVersionKind().kind() + "List")
-            .make()
-            .load(ListResult.class.getClassLoader())
-            .getLoaded();
+        return GenericClassUtils.generateConcreteClass(ListResult.class,
+            scheme.type(),
+            () -> {
+                var pkgName = scheme.type().getPackageName();
+                return pkgName + '.' + scheme.groupVersionKind().kind() + "List";
+            });
     }
 
     /**
@@ -116,7 +118,7 @@ public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
      */
     public static <T> Class<?> generateGenericClass(Class<T> type) {
         return GenericClassUtils.generateConcreteClass(ListResult.class, type,
-            () -> type.getSimpleName() + "List");
+            () -> type.getName() + "List");
     }
 
     public static <T> ListResult<T> emptyResult() {
@@ -128,6 +130,9 @@ public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
      */
     public static <T> List<T> subList(List<T> list, int page, int size) {
         if (page < 1) {
+            page = 1;
+        }
+        if (size < 1) {
             return list;
         }
         List<T> listSort = new ArrayList<>();
@@ -138,6 +143,15 @@ public class ListResult<T> implements Iterable<T>, Supplier<Stream<T>> {
             listSort = list.subList(pageStart, pageEnd);
         }
         return listSort;
+    }
+
+    /**
+     * Gets the first element of the list result.
+     */
+    public static <T> Optional<T> first(ListResult<T> listResult) {
+        return Optional.ofNullable(listResult)
+            .map(ListResult::getItems)
+            .map(list -> list.isEmpty() ? null : list.get(0));
     }
 
     @Override

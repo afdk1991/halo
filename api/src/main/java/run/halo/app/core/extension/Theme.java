@@ -1,6 +1,7 @@
 package run.halo.app.core.extension;
 
 import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.NOT_REQUIRED;
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
@@ -14,6 +15,7 @@ import org.springframework.util.Assert;
 import run.halo.app.extension.AbstractExtension;
 import run.halo.app.extension.GVK;
 import run.halo.app.infra.ConditionList;
+import run.halo.app.infra.model.License;
 
 /**
  * <p>Theme extension.</p>
@@ -32,7 +34,7 @@ public class Theme extends AbstractExtension {
 
     public static final String THEME_NAME_LABEL = "theme.halo.run/theme-name";
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private ThemeSpec spec;
 
     private ThemeStatus status;
@@ -42,19 +44,24 @@ public class Theme extends AbstractExtension {
     public static class ThemeSpec {
         private static final String WILDCARD = "*";
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private String displayName;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private Author author;
 
         private String description;
 
         private String logo;
 
+        @Deprecated(forRemoval = true, since = "2.7.0")
         private String website;
 
+        private String homepage;
+
         private String repo;
+
+        private String issues;
 
         private String version;
 
@@ -68,6 +75,8 @@ public class Theme extends AbstractExtension {
         private String settingName;
 
         private String configMapName;
+
+        private List<License> license;
 
         @Schema
         private CustomTemplates customTemplates;
@@ -88,6 +97,13 @@ public class Theme extends AbstractExtension {
                 return this.requires;
             }
             return StringUtils.defaultString(this.require, WILDCARD);
+        }
+
+        /**
+         * Compatible with {@link #website} property.
+         */
+        public String getHomepage() {
+            return StringUtils.defaultString(this.homepage, this.website);
         }
     }
 
@@ -125,7 +141,7 @@ public class Theme extends AbstractExtension {
     @ToString
     public static class Author {
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private String name;
 
         private String website;
@@ -138,7 +154,6 @@ public class Theme extends AbstractExtension {
         private List<TemplateDescriptor> page;
     }
 
-
     /**
      * Type used to describe custom template page.
      *
@@ -148,14 +163,14 @@ public class Theme extends AbstractExtension {
     @Data
     public static class TemplateDescriptor {
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private String name;
 
         private String description;
 
         private String screenshot;
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private String file;
     }
 

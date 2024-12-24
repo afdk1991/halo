@@ -1,6 +1,6 @@
 plugins {
     id 'java-platform'
-    id 'maven-publish'
+    id 'halo.publish'
 }
 
 group = 'run.halo.tools.platform'
@@ -21,12 +21,11 @@ dependencies {
 }
 
 publishing {
-    publications {
-        pluginPlatform(MavenPublication) {
-            from components.javaPlatform
+    publications.named('mavenJava', MavenPublication) {
+        from components.javaPlatform
+        pom {
+            name = 'Plugin platform'
+            description = "$project.description"
         }
-    }
-    repositories {
-        mavenLocal()
     }
 }

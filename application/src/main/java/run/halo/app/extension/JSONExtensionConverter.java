@@ -2,13 +2,16 @@ package run.halo.app.extension;
 
 import static org.openapi4j.core.validation.ValidationSeverity.ERROR;
 import static org.springframework.util.StringUtils.arrayToCommaDelimitedString;
+import static run.halo.app.extension.ExtensionStoreUtil.buildStoreName;
+import static run.halo.app.extension.Unstructured.OBJECT_MAPPER;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.swagger.v3.core.util.Json;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.Optional;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.openapi4j.core.exception.ResolutionException;
 import org.openapi4j.core.model.v3.OAI3;
@@ -34,17 +37,14 @@ import run.halo.app.extension.store.ExtensionStore;
 @Component
 public class JSONExtensionConverter implements ExtensionConverter {
 
+    @Getter
     public final ObjectMapper objectMapper;
 
     private final SchemeManager schemeManager;
 
     public JSONExtensionConverter(SchemeManager schemeManager) {
         this.schemeManager = schemeManager;
-        this.objectMapper = Json.mapper();
-    }
-
-    public ObjectMapper getObjectMapper() {
-        return objectMapper;
+        this.objectMapper = OBJECT_MAPPER;
     }
 
     @Override
@@ -53,8 +53,14 @@ public class JSONExtensionConverter implements ExtensionConverter {
         var scheme = schemeManager.get(gvk);
 
         try {
+            var convertedExtension = Optional.of(extension)
+                .map(item -> scheme.type().isAssignableFrom(item.getClass()) ? item
+                    : objectMapper.convertValue(item, scheme.type())
+                )
+                .orElseThrow();
             var validation = new ValidationData<>(extension);
-            var extensionJsonNode = objectMapper.valueToTree(extension);
+
+            var extensionJsonNode = objectMapper.valueToTree(convertedExtension);
             var validator = getValidator(scheme);
             validator.validate(extensionJsonNode, validation);
             if (!validation.isValid()) {
@@ -65,7 +71,7 @@ public class JSONExtensionConverter implements ExtensionConverter {
             }
 
             var version = extension.getMetadata().getVersion();
-            var storeName = ExtensionUtil.buildStoreName(scheme, extension.getMetadata().getName());
+            var storeName = buildStoreName(scheme, extension.getMetadata().getName());
             var data = objectMapper.writeValueAsBytes(extensionJsonNode);
             return new ExtensionStore(storeName, data, version);
         } catch (IOException e) {

@@ -1,9 +1,11 @@
 package run.halo.app.theme.finders.vo;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
+
 import io.swagger.v3.oas.annotations.media.Schema;
-import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
 import run.halo.app.content.comment.OwnerInfo;
 import run.halo.app.core.extension.content.Comment;
 import run.halo.app.extension.MetadataOperator;
@@ -15,22 +17,22 @@ import run.halo.app.extension.MetadataOperator;
  * @since 2.0.0
  */
 @Data
-@Builder
+@Accessors(chain = true)
 @EqualsAndHashCode
 public class CommentVo implements ExtensionVoOperator {
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private MetadataOperator metadata;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private Comment.CommentSpec spec;
 
     private Comment.CommentStatus status;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private OwnerInfo owner;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private CommentStatsVo stats;
 
     /**
@@ -40,10 +42,9 @@ public class CommentVo implements ExtensionVoOperator {
      * @return a value object for {@link Comment}
      */
     public static CommentVo from(Comment comment) {
-        return CommentVo.builder()
-            .metadata(comment.getMetadata())
-            .spec(comment.getSpec())
-            .status(comment.getStatus())
-            .build();
+        return new CommentVo()
+            .setMetadata(comment.getMetadata())
+            .setSpec(comment.getSpec())
+            .setStatus(comment.getStatus());
     }
 }

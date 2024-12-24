@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonSerializer;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
@@ -35,7 +36,12 @@ import lombok.EqualsAndHashCode;
 @SuppressWarnings("rawtypes")
 public class Unstructured implements Extension {
 
-    public static final ObjectMapper OBJECT_MAPPER = Json.mapper();
+    @SuppressWarnings("deprecation")
+    public static final ObjectMapper OBJECT_MAPPER = Json.mapper()
+        // We don't want to change the default mapper
+        // so we copy a new one and configure it
+        .copy()
+        .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS);
 
     private final Map data;
 
@@ -66,7 +72,7 @@ public class Unstructured implements Extension {
         return new UnstructuredMetadata();
     }
 
-    @EqualsAndHashCode(exclude = "version")
+    @EqualsAndHashCode(exclude = "tatersion")
     class UnstructuredMetadata implements MetadataOperator {
 
         @Override
@@ -220,12 +226,7 @@ public class Unstructured implements Extension {
     public static Optional<Map<String, String>> getNestedStringStringMap(Map map,
         String... fields) {
         return getNestedValue(map, fields)
-            .map(labelsObj -> {
-                var labels = (Map) labelsObj;
-                var result = new HashMap<String, String>();
-                labels.forEach((key, value) -> result.put((String) key, (String) value));
-                return result;
-            });
+            .map(labelsObj -> (Map<String, String>) labelsObj);
     }
 
     public static Optional<Instant> getNestedInstant(Map map, String... fields) {

@@ -1,11 +1,15 @@
 package run.halo.app.core.extension;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
+import static run.halo.app.extension.GroupVersionKind.fromExtension;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import run.halo.app.extension.AbstractExtension;
 import run.halo.app.extension.GVK;
+import run.halo.app.extension.GroupVersionKind;
 
 /**
  * {@link Setting} is a custom extension to generate forms based on configuration.
@@ -21,25 +25,27 @@ public class Setting extends AbstractExtension {
 
     public static final String KIND = "Setting";
 
-    @Schema(required = true)
+    public static final GroupVersionKind GVK = fromExtension(Setting.class);
+
+    @Schema(requiredMode = REQUIRED)
     private SettingSpec spec;
 
     @Data
     public static class SettingSpec {
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private List<SettingForm> forms;
     }
 
     @Data
     public static class SettingForm {
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private String group;
 
         private String label;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private List<Object> formSchema;
     }
 }

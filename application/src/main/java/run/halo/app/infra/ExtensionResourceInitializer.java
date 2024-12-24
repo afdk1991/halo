@@ -1,18 +1,21 @@
 package run.halo.app.infra;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationStartedEvent;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.event.EventListener;
+import org.springframework.context.ApplicationListener;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.stereotype.Component;
 import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import run.halo.app.extension.ExtensionUtil;
 import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.extension.Unstructured;
 import run.halo.app.infra.properties.HaloProperties;
@@ -28,7 +31,7 @@ import run.halo.app.infra.utils.YamlUnstructuredLoader;
  */
 @Slf4j
 @Component
-public class ExtensionResourceInitializer {
+public class ExtensionResourceInitializer implements ApplicationListener<ApplicationStartedEvent> {
 
     public static final Set<String> REQUIRED_EXTENSION_LOCATIONS =
         Set.of("classpath:/extensions/*.yaml", "classpath:/extensions/*.yml");
@@ -45,8 +48,7 @@ public class ExtensionResourceInitializer {
         this.eventPublisher = eventPublisher;
     }
 
-    @EventListener(SchemeInitializedEvent.class)
-    public Mono<Void> initialize(SchemeInitializedEvent initializedEvent) {
+    public void onApplicationEvent(ApplicationStartedEvent initializedEvent) {
         var locations = new HashSet<String>();
         if (!haloProperties.isRequiredExtensionDisabled()) {
             locations.addAll(REQUIRED_EXTENSION_LOCATIONS);
@@ -55,10 +57,10 @@ public class ExtensionResourceInitializer {
             locations.addAll(haloProperties.getInitialExtensionLocations());
         }
         if (CollectionUtils.isEmpty(locations)) {
-            return Mono.empty();
+            return;
         }
 
-        return Flux.fromIterable(locations)
+        Flux.fromIterable(locations)
             .doOnNext(location ->
                 log.debug("Trying to initialize extension resources from location: {}", location))
             .map(this::listResources)
@@ -82,7 +84,8 @@ public class ExtensionResourceInitializer {
                 }
             })
             .then(Mono.fromRunnable(
-                () -> eventPublisher.publishEvent(new ExtensionInitializedEvent(this))));
+                () -> eventPublisher.publishEvent(new ExtensionInitializedEvent(this))))
+            .block(Duration.ofMinutes(1));
     }
 
     private Mono<Unstructured> createOrUpdate(Unstructured extension) {
@@ -94,7 +97,13 @@ public class ExtensionResourceInitializer {
                 extension.getMetadata().setVersion(existingExt.getMetadata().getVersion());
                 return extensionClient.update(extension);
             })
-            .switchIfEmpty(Mono.defer(() -> extensionClient.create(extension)));
+            .switchIfEmpty(Mono.defer(() -> {
+                if (ExtensionUtil.isDeleted(extension)) {
+                    // skip deleted extension
+                    return Mono.empty();
+                }
+                return extensionClient.create(extension);
+            }));
     }
 
     private List<Resource> listResources(String location) {

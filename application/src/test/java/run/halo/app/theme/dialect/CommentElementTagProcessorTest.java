@@ -2,9 +2,10 @@ package run.halo.app.theme.dialect;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
 import org.thymeleaf.IEngineConfiguration;
 import org.thymeleaf.TemplateEngine;
@@ -24,7 +26,11 @@ import org.thymeleaf.spring6.expression.ThymeleafEvaluationContext;
 import org.thymeleaf.templateresolver.StringTemplateResolver;
 import org.thymeleaf.templateresource.ITemplateResource;
 import org.thymeleaf.templateresource.StringTemplateResource;
-import run.halo.app.plugin.ExtensionComponentsFinder;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import run.halo.app.infra.SystemConfigurableEnvironmentFetcher;
+import run.halo.app.infra.SystemSetting;
+import run.halo.app.plugin.extensionpoint.ExtensionGetter;
 
 /**
  * Tests for {@link CommentElementTagProcessor}.
@@ -41,7 +47,13 @@ class CommentElementTagProcessorTest {
     private ApplicationContext applicationContext;
 
     @Mock
-    private ExtensionComponentsFinder componentsFinder;
+    private ExtensionGetter extensionGetter;
+
+    @Mock
+    private ObjectProvider<ExtensionGetter>  extensionGetterProvider;
+
+    @Mock
+    private SystemConfigurableEnvironmentFetcher environmentFetcher;
 
     private TemplateEngine templateEngine;
 
@@ -51,14 +63,26 @@ class CommentElementTagProcessorTest {
         templateEngine = new TemplateEngine();
         templateEngine.setDialects(Set.of(haloProcessorDialect, new SpringStandardDialect()));
         templateEngine.addTemplateResolver(new TestTemplateResolver());
-        when(applicationContext.getBean(eq(ExtensionComponentsFinder.class)))
-            .thenReturn(componentsFinder);
+        lenient().when(applicationContext.getBean(eq(ExtensionGetter.class)))
+            .thenReturn(extensionGetter);
+        when(applicationContext.getBeanProvider(ExtensionGetter.class))
+            .thenReturn(extensionGetterProvider);
+        when(extensionGetterProvider.getIfUnique()).thenReturn(null);
     }
 
     @Test
     void doProcess() {
         Context context = getContext();
 
+        when(applicationContext.getBean(eq(SystemConfigurableEnvironmentFetcher.class)))
+            .thenReturn(environmentFetcher);
+        var commentSetting = mock(SystemSetting.Comment.class);
+        when(environmentFetcher.fetchComment())
+            .thenReturn(Mono.just(commentSetting));
+        when(commentSetting.getEnable()).thenReturn(true);
+
+        when(extensionGetter.getEnabledExtensions(eq(CommentWidget.class)))
+            .thenReturn(Flux.empty());
         String result = templateEngine.process("commentWidget", context);
         assertThat(result).isEqualTo("""
             <!DOCTYPE html>
@@ -70,8 +94,8 @@ class CommentElementTagProcessorTest {
             </html>
             """);
 
-        when(componentsFinder.getExtensions(CommentWidget.class))
-            .thenReturn(List.of(new DefaultCommentWidget()));
+        when(extensionGetter.getEnabledExtensions(eq(CommentWidget.class)))
+            .thenReturn(Flux.just(new DefaultCommentWidget()));
         result = templateEngine.process("commentWidget", context);
         assertThat(result).isEqualTo("""
             <!DOCTYPE html>

@@ -7,11 +7,11 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.pf4j.DevelopmentPluginClasspath;
 import org.pf4j.PluginRuntimeException;
-import org.pf4j.PluginState;
 import org.pf4j.util.FileUtils;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import run.halo.app.core.extension.Plugin;
+import run.halo.app.extension.MetadataUtil;
 import run.halo.app.extension.Unstructured;
 import run.halo.app.infra.utils.YamlUnstructuredLoader;
 
@@ -64,25 +64,32 @@ public class YamlPluginFinder {
         Plugin plugin = readPluginDescriptor(pluginPath);
         if (plugin.getStatus() == null) {
             Plugin.PluginStatus pluginStatus = new Plugin.PluginStatus();
-            pluginStatus.setPhase(PluginState.RESOLVED);
+            pluginStatus.setPhase(Plugin.Phase.PENDING);
             pluginStatus.setLoadLocation(pluginPath.toUri());
             plugin.setStatus(pluginStatus);
         }
+        MetadataUtil.nullSafeAnnotations(plugin)
+            .put(PluginConst.PLUGIN_PATH, pluginPath.toString());
         return plugin;
     }
 
     protected Plugin readPluginDescriptor(Path pluginPath) {
-        Path propertiesPath = getManifestPath(pluginPath, propertiesFileName);
-        if (propertiesPath == null) {
-            throw new PluginRuntimeException("Cannot find the plugin manifest path");
-        }
+        Path propertiesPath = null;
+        try {
+            propertiesPath = getManifestPath(pluginPath, propertiesFileName);
+            if (propertiesPath == null) {
+                throw new PluginRuntimeException("Cannot find the plugin manifest path");
+            }
 
-        log.debug("Lookup plugin descriptor in '{}'", propertiesPath);
-        if (Files.notExists(propertiesPath)) {
-            throw new PluginRuntimeException("Cannot find '{}' path", propertiesPath);
+            log.debug("Lookup plugin descriptor in '{}'", propertiesPath);
+            if (Files.notExists(propertiesPath)) {
+                throw new PluginRuntimeException("Cannot find '{}' path", propertiesPath);
+            }
+            Resource propertyResource = new FileSystemResource(propertiesPath);
+            return unstructuredToPlugin(propertyResource);
+        } finally {
+            FileUtils.closePath(propertiesPath);
         }
-        Resource propertyResource = new FileSystemResource(propertiesPath);
-        return unstructuredToPlugin(propertyResource);
     }
 
     protected Plugin unstructuredToPlugin(Resource propertyResource) {

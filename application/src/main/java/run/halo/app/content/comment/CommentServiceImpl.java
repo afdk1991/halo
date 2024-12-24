@@ -1,31 +1,36 @@
 package run.halo.app.content.comment;
 
-import static run.halo.app.extension.router.selector.SelectorUtil.labelAndFieldSelectorToPredicate;
+import static run.halo.app.extension.index.query.QueryFactory.and;
+import static run.halo.app.extension.index.query.QueryFactory.equal;
+import static run.halo.app.extension.index.query.QueryFactory.isNull;
 
+import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
-import java.util.Objects;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import org.apache.commons.lang3.BooleanUtils;
-import org.apache.commons.lang3.StringUtils;
-import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.data.domain.Sort;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.util.Assert;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import run.halo.app.core.extension.User;
+import reactor.util.retry.Retry;
+import run.halo.app.core.counter.CounterService;
 import run.halo.app.core.extension.content.Comment;
-import run.halo.app.core.extension.service.UserService;
+import run.halo.app.core.user.service.RoleService;
+import run.halo.app.core.user.service.UserService;
 import run.halo.app.extension.Extension;
+import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.ListResult;
+import run.halo.app.extension.PageRequest;
+import run.halo.app.extension.PageRequestImpl;
 import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.extension.Ref;
+import run.halo.app.extension.router.selector.FieldSelector;
 import run.halo.app.infra.SystemConfigurableEnvironmentFetcher;
 import run.halo.app.infra.exception.AccessDeniedException;
-import run.halo.app.metrics.CounterService;
-import run.halo.app.metrics.MeterUtils;
-import run.halo.app.plugin.ExtensionComponentsFinder;
+import run.halo.app.plugin.extensionpoint.ExtensionGetter;
 
 /**
  * Comment service implementation.
@@ -34,36 +39,26 @@ import run.halo.app.plugin.ExtensionComponentsFinder;
  * @since 2.0.0
  */
 @Component
-public class CommentServiceImpl implements CommentService {
+public class CommentServiceImpl extends AbstractCommentService implements CommentService {
 
-    private final ReactiveExtensionClient client;
-    private final UserService userService;
-    private final ExtensionComponentsFinder extensionComponentsFinder;
-
+    private final ExtensionGetter extensionGetter;
     private final SystemConfigurableEnvironmentFetcher environmentFetcher;
-    private final CounterService counterService;
 
-    public CommentServiceImpl(ReactiveExtensionClient client,
-        UserService userService, ExtensionComponentsFinder extensionComponentsFinder,
-        SystemConfigurableEnvironmentFetcher environmentFetcher,
-        CounterService counterService) {
-        this.client = client;
-        this.userService = userService;
-        this.extensionComponentsFinder = extensionComponentsFinder;
+    public CommentServiceImpl(RoleService roleService, ReactiveExtensionClient client,
+        UserService userService, CounterService counterService, ExtensionGetter extensionGetter,
+        SystemConfigurableEnvironmentFetcher environmentFetcher) {
+        super(roleService, client, userService, counterService);
+        this.extensionGetter = extensionGetter;
         this.environmentFetcher = environmentFetcher;
-        this.counterService = counterService;
     }
 
     @Override
     public Mono<ListResult<ListedComment>> listComment(CommentQuery commentQuery) {
-        Comparator<Comment> comparator =
-            CommentSorter.from(commentQuery.getSort(), commentQuery.getSortOrder());
-        return this.client.list(Comment.class, commentPredicate(commentQuery),
-                comparator,
-                commentQuery.getPage(), commentQuery.getSize())
+        return this.client.listBy(Comment.class, commentQuery.toListOptions(),
+                commentQuery.toPageRequest())
             .flatMap(comments -> Flux.fromStream(comments.get()
                     .map(this::toListedComment))
-                .concatMap(Function.identity())
+                .flatMapSequential(Function.identity())
                 .collectList()
                 .map(list -> new ListResult<>(comments.getPage(), comments.getSize(),
                     comments.getTotal(), list)
@@ -105,22 +100,75 @@ public class CommentServiceImpl implements CommentService {
                 }
 
                 comment.getSpec().setHidden(false);
-
-                // return if the comment owner is not null
-                if (comment.getSpec().getOwner() != null) {
-                    return Mono.just(comment);
-                }
-                // populate owner from current user
-                return fetchCurrentUser()
-                    .map(this::toCommentOwner)
-                    .map(owner -> {
-                        comment.getSpec().setOwner(owner);
-                        return comment;
-                    })
-                    .switchIfEmpty(
-                        Mono.error(new IllegalStateException("The owner must not be null.")));
+                return Mono.just(comment);
             })
+            .flatMap(populatedComment -> Mono.when(populateOwner(populatedComment),
+                    populateApproveState(populatedComment))
+                .thenReturn(populatedComment)
+            )
             .flatMap(client::create);
+    }
+
+    private Mono<Void> populateApproveState(Comment comment) {
+        return hasCommentManagePermission()
+            .filter(Boolean::booleanValue)
+            .doOnNext(hasPermission -> {
+                comment.getSpec().setApproved(true);
+                comment.getSpec().setApprovedTime(Instant.now());
+            })
+            .then();
+    }
+
+    Mono<Void> populateOwner(Comment comment) {
+        if (comment.getSpec().getOwner() != null) {
+            return Mono.empty();
+        }
+        return fetchCurrentUser()
+            .switchIfEmpty(Mono.error(new IllegalStateException("The owner must not be null.")))
+            .map(this::toCommentOwner)
+            .doOnNext(owner -> comment.getSpec().setOwner(owner))
+            .then();
+    }
+
+    @Override
+    public Mono<Void> removeBySubject(@NonNull Ref subjectRef) {
+        Assert.notNull(subjectRef, "The subjectRef must not be null.");
+        return cleanupComments(subjectRef, 200);
+    }
+
+    private Mono<Void> cleanupComments(Ref subjectRef, int batchSize) {
+        // ascending order by creation time and name
+        final var pageRequest = PageRequestImpl.of(1, batchSize,
+            Sort.by("metadata.creationTimestamp", "metadata.name"));
+        // forever loop first page until no more to delete
+        return listCommentsByRef(subjectRef, pageRequest)
+            .flatMap(page -> Flux.fromIterable(page.getItems())
+                .flatMap(this::deleteWithRetry)
+                .then(page.hasNext() ? cleanupComments(subjectRef, batchSize) : Mono.empty())
+            );
+    }
+
+    private Mono<Comment> deleteWithRetry(Comment item) {
+        return client.delete(item)
+            .onErrorResume(OptimisticLockingFailureException.class,
+                e -> attemptToDelete(item.getMetadata().getName()));
+    }
+
+    private Mono<Comment> attemptToDelete(String name) {
+        return Mono.defer(() -> client.fetch(Comment.class, name)
+                .flatMap(client::delete)
+            )
+            .retryWhen(Retry.backoff(8, Duration.ofMillis(100))
+                .filter(OptimisticLockingFailureException.class::isInstance));
+    }
+
+    Mono<ListResult<Comment>> listCommentsByRef(Ref subjectRef, PageRequest pageRequest) {
+        var listOptions = new ListOptions();
+        listOptions.setFieldSelector(FieldSelector.of(
+            and(equal("spec.subjectRef", Comment.toSubjectRefKey(subjectRef)),
+                isNull("metadata.deletionTimestamp"))
+        ));
+        return client.listBy(Comment.class, listOptions, pageRequest);
     }
 
     private boolean checkCommentOwner(Comment comment, Boolean onlySystemUser) {
@@ -131,152 +179,24 @@ public class CommentServiceImpl implements CommentService {
         return false;
     }
 
-    private Comment.CommentOwner toCommentOwner(User user) {
-        Comment.CommentOwner owner = new Comment.CommentOwner();
-        owner.setKind(User.KIND);
-        owner.setName(user.getMetadata().getName());
-        owner.setDisplayName(user.getSpec().getDisplayName());
-        return owner;
-    }
-
-    private Mono<User> fetchCurrentUser() {
-        return ReactiveSecurityContextHolder.getContext()
-            .map(securityContext -> securityContext.getAuthentication().getName())
-            .flatMap(username -> client.fetch(User.class, username));
-    }
-
     private Mono<ListedComment> toListedComment(Comment comment) {
-        ListedComment.ListedCommentBuilder commentBuilder = ListedComment.builder()
-            .comment(comment);
-        return Mono.just(commentBuilder)
-            .flatMap(builder -> {
-                Comment.CommentOwner owner = comment.getSpec().getOwner();
-                // not empty
-                return getCommentOwnerInfo(owner)
-                    .map(builder::owner);
-            })
-            .flatMap(builder -> getCommentSubject(comment.getSpec().getSubjectRef())
-                .map(subject -> {
-                    builder.subject(subject);
-                    return builder;
-                })
-                .switchIfEmpty(Mono.just(builder))
-            )
-            .map(ListedComment.ListedCommentBuilder::build)
-            .flatMap(lc -> fetchStats(comment)
-                .doOnNext(lc::setStats)
-                .thenReturn(lc));
-    }
-
-    Mono<CommentStats> fetchStats(Comment comment) {
-        Assert.notNull(comment, "The comment must not be null.");
-        String name = comment.getMetadata().getName();
-        return counterService.getByName(MeterUtils.nameOf(Comment.class, name))
-            .map(counter -> CommentStats.builder()
-                .upvote(counter.getUpvote())
-                .build()
-            )
-            .defaultIfEmpty(CommentStats.empty());
-    }
-
-    private Mono<OwnerInfo> getCommentOwnerInfo(Comment.CommentOwner owner) {
-        if (User.KIND.equals(owner.getKind())) {
-            return userService.getUserOrGhost(owner.getName())
-                .map(OwnerInfo::from);
-        }
-        if (Comment.CommentOwner.KIND_EMAIL.equals(owner.getKind())) {
-            return Mono.just(OwnerInfo.from(owner));
-        }
-        throw new IllegalStateException(
-            "Unsupported owner kind: " + owner.getKind());
+        var builder = ListedComment.builder().comment(comment);
+        // not empty
+        var ownerInfoMono = getOwnerInfo(comment.getSpec().getOwner())
+            .doOnNext(builder::owner);
+        var subjectMono = getCommentSubject(comment.getSpec().getSubjectRef())
+            .doOnNext(builder::subject);
+        var statsMono = fetchCommentStats(comment.getMetadata().getName())
+            .doOnNext(builder::stats);
+        return Mono.when(ownerInfoMono, subjectMono, statsMono)
+            .then(Mono.fromSupplier(builder::build));
     }
 
     @SuppressWarnings("unchecked")
     Mono<Extension> getCommentSubject(Ref ref) {
-        return extensionComponentsFinder.getExtensions(CommentSubject.class)
-            .stream()
-            .filter(commentSubject -> commentSubject.supports(ref))
-            .findFirst()
-            .map(commentSubject -> commentSubject.get(ref.getName()))
-            .orElseGet(Mono::empty);
-    }
-
-    Predicate<Comment> commentPredicate(CommentQuery query) {
-        Predicate<Comment> predicate = comment -> true;
-
-        String keyword = query.getKeyword();
-        if (keyword != null) {
-            predicate = predicate.and(comment -> {
-                String raw = comment.getSpec().getRaw();
-                return StringUtils.containsIgnoreCase(raw, keyword);
-            });
-        }
-
-        Boolean approved = query.getApproved();
-        if (approved != null) {
-            predicate =
-                predicate.and(comment -> Objects.equals(comment.getSpec().getApproved(), approved));
-        }
-        Boolean hidden = query.getHidden();
-        if (hidden != null) {
-            predicate =
-                predicate.and(comment -> Objects.equals(comment.getSpec().getHidden(), hidden));
-        }
-
-        Boolean top = query.getTop();
-        if (top != null) {
-            predicate = predicate.and(comment -> Objects.equals(comment.getSpec().getTop(), top));
-        }
-
-        Boolean allowNotification = query.getAllowNotification();
-        if (allowNotification != null) {
-            predicate = predicate.and(
-                comment -> Objects.equals(comment.getSpec().getAllowNotification(),
-                    allowNotification));
-        }
-
-        String ownerKind = query.getOwnerKind();
-        if (ownerKind != null) {
-            predicate = predicate.and(comment -> {
-                Comment.CommentOwner owner = comment.getSpec().getOwner();
-                return Objects.equals(owner.getKind(), ownerKind);
-            });
-        }
-
-        String ownerName = query.getOwnerName();
-        if (ownerName != null) {
-            predicate = predicate.and(comment -> {
-                Comment.CommentOwner owner = comment.getSpec().getOwner();
-                if (Comment.CommentOwner.KIND_EMAIL.equals(owner.getKind())) {
-                    return Objects.equals(owner.getKind(), ownerKind)
-                        && (StringUtils.containsIgnoreCase(owner.getName(), ownerName)
-                        || StringUtils.containsIgnoreCase(owner.getDisplayName(), ownerName));
-                }
-                return Objects.equals(owner.getKind(), ownerKind)
-                    && StringUtils.containsIgnoreCase(owner.getName(), ownerName);
-            });
-        }
-
-        String subjectKind = query.getSubjectKind();
-        if (subjectKind != null) {
-            predicate = predicate.and(comment -> {
-                Ref subjectRef = comment.getSpec().getSubjectRef();
-                return Objects.equals(subjectRef.getKind(), subjectKind);
-            });
-        }
-
-        String subjectName = query.getSubjectName();
-        if (subjectName != null) {
-            predicate = predicate.and(comment -> {
-                Ref subjectRef = comment.getSpec().getSubjectRef();
-                return Objects.equals(subjectRef.getKind(), subjectKind)
-                    && StringUtils.containsIgnoreCase(subjectRef.getName(), subjectName);
-            });
-        }
-
-        Predicate<Extension> labelAndFieldSelectorPredicate =
-            labelAndFieldSelectorToPredicate(query.getLabelSelector(),
-                query.getFieldSelector());
-        return predicate.and(labelAndFieldSelectorPredicate);
+        return extensionGetter.getExtensions(CommentSubject.class)
+            .filter(subject -> subject.supports(ref))
+            .next()
+            .flatMap(subject -> subject.get(ref.getName()));
     }
 }

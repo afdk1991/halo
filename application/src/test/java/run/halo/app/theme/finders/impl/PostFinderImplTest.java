@@ -2,8 +2,6 @@ package run.halo.app.theme.finders.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -11,28 +9,30 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.apache.commons.lang3.tuple.Pair;
-import org.apache.logging.log4j.util.Strings;
+import java.util.function.Predicate;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import reactor.core.publisher.Flux;
+import org.springframework.data.domain.Sort;
 import reactor.core.publisher.Mono;
-import run.halo.app.content.ContentWrapper;
 import run.halo.app.content.PostService;
+import run.halo.app.core.counter.CounterService;
 import run.halo.app.core.extension.content.Post;
 import run.halo.app.extension.ListResult;
 import run.halo.app.extension.Metadata;
+import run.halo.app.extension.PageRequest;
 import run.halo.app.extension.ReactiveExtensionClient;
-import run.halo.app.metrics.CounterService;
 import run.halo.app.theme.finders.CategoryFinder;
 import run.halo.app.theme.finders.ContributorFinder;
+import run.halo.app.theme.finders.PostPublicQueryService;
 import run.halo.app.theme.finders.TagFinder;
-import run.halo.app.theme.finders.vo.ContentVo;
+import run.halo.app.theme.finders.vo.ListedPostVo;
 import run.halo.app.theme.finders.vo.PostArchiveVo;
 import run.halo.app.theme.finders.vo.PostArchiveYearMonthVo;
+import run.halo.app.theme.router.DefaultQueryPostPredicateResolver;
 
 /**
  * Tests for {@link PostFinderImpl}.
@@ -61,38 +61,18 @@ class PostFinderImplTest {
     @Mock
     private ContributorFinder contributorFinder;
 
+    @Mock
+    private PostPublicQueryService publicQueryService;
+
     @InjectMocks
     private PostFinderImpl postFinder;
 
     @Test
-    void content() {
-        Post post = post(1);
-        post.getSpec().setReleaseSnapshot("release-snapshot");
-        ContentWrapper contentWrapper = ContentWrapper.builder()
-            .snapshotName("snapshot")
-            .raw("raw")
-            .content("content")
-            .rawType("rawType")
-            .build();
-        when(postService.getReleaseContent(eq(post.getMetadata().getName())))
-            .thenReturn(Mono.just(contentWrapper));
-        ContentVo content = postFinder.content("post-1").block();
-        assertThat(content.getContent()).isEqualTo(contentWrapper.getContent());
-        assertThat(content.getRaw()).isEqualTo(contentWrapper.getRaw());
-    }
-
-    @Test
-    void compare() {
-        List<String> strings = posts().stream().sorted(PostFinderImpl.defaultComparator())
-            .map(post -> post.getMetadata().getName())
-            .toList();
-        assertThat(strings).isEqualTo(
-            List.of("post-6", "post-2", "post-1", "post-5", "post-4", "post-3"));
-    }
-
-    @Test
     void predicate() {
-        List<String> strings = posts().stream().filter(PostFinderImpl.FIXED_PREDICATE)
+        Predicate<Post> predicate = new DefaultQueryPostPredicateResolver().getPredicate().block();
+        assertThat(predicate).isNotNull();
+
+        List<String> strings = posts().stream().filter(predicate)
             .map(post -> post.getMetadata().getName())
             .toList();
         assertThat(strings).isEqualTo(List.of("post-1", "post-2", "post-6"));
@@ -100,12 +80,12 @@ class PostFinderImplTest {
 
     @Test
     void archives() {
-        when(counterService.getByName(any())).thenReturn(Mono.empty());
-        ListResult<Post> listResult = new ListResult<>(1, 10, 3, postsForArchives());
-        when(client.list(eq(Post.class), any(), any(), anyInt(), anyInt()))
+        List<ListedPostVo> listedPostVos = postsForArchives().stream()
+            .map(ListedPostVo::from)
+            .toList();
+        ListResult<ListedPostVo> listResult = new ListResult<>(1, 10, 3, listedPostVos);
+        when(publicQueryService.list(any(), any(PageRequest.class)))
             .thenReturn(Mono.just(listResult));
-        when(contributorFinder.getContributor(any())).thenReturn(Mono.empty());
-        when(contributorFinder.getContributors(any())).thenReturn(Flux.empty());
 
         ListResult<PostArchiveVo> archives = postFinder.archives(1, 10).block();
         assertThat(archives).isNotNull();
@@ -124,22 +104,6 @@ class PostFinderImplTest {
     }
 
     @Test
-    void fixedSizeSlidingWindow() {
-        PostFinderImpl.FixedSizeSlidingWindow<Integer>
-            window = new PostFinderImpl.FixedSizeSlidingWindow<>(3);
-
-        List<String> list = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
-            window.add(i);
-            list.add(Strings.join(window.elements(), ','));
-        }
-        assertThat(list).isEqualTo(
-            List.of("0", "0,1", "0,1,2", "1,2,3", "2,3,4", "3,4,5", "4,5,6", "5,6,7", "6,7,8",
-                "7,8,9")
-        );
-    }
-
-    @Test
     void postPreviousNextPair() {
         List<String> postNames = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
@@ -147,28 +111,27 @@ class PostFinderImplTest {
         }
 
         // post-0, post-1, post-2
-        Pair<String, String> previousNextPair =
-            PostFinderImpl.postPreviousNextPair(postNames, "post-0");
-        assertThat(previousNextPair.getLeft()).isNull();
-        assertThat(previousNextPair.getRight()).isEqualTo("post-1");
+        var previousNextPair = PostFinderImpl.findPostNavigation(postNames, "post-0");
+        assertThat(previousNextPair.prev()).isNull();
+        assertThat(previousNextPair.next()).isEqualTo("post-1");
 
-        previousNextPair = PostFinderImpl.postPreviousNextPair(postNames, "post-1");
-        assertThat(previousNextPair.getLeft()).isEqualTo("post-0");
-        assertThat(previousNextPair.getRight()).isEqualTo("post-2");
+        previousNextPair = PostFinderImpl.findPostNavigation(postNames, "post-1");
+        assertThat(previousNextPair.prev()).isEqualTo("post-0");
+        assertThat(previousNextPair.next()).isEqualTo("post-2");
 
         // post-1, post-2, post-3
-        previousNextPair = PostFinderImpl.postPreviousNextPair(postNames, "post-2");
-        assertThat(previousNextPair.getLeft()).isEqualTo("post-1");
-        assertThat(previousNextPair.getRight()).isEqualTo("post-3");
+        previousNextPair = PostFinderImpl.findPostNavigation(postNames, "post-2");
+        assertThat(previousNextPair.prev()).isEqualTo("post-1");
+        assertThat(previousNextPair.next()).isEqualTo("post-3");
 
         // post-7, post-8, post-9
-        previousNextPair = PostFinderImpl.postPreviousNextPair(postNames, "post-8");
-        assertThat(previousNextPair.getLeft()).isEqualTo("post-7");
-        assertThat(previousNextPair.getRight()).isEqualTo("post-9");
+        previousNextPair = PostFinderImpl.findPostNavigation(postNames, "post-8");
+        assertThat(previousNextPair.prev()).isEqualTo("post-7");
+        assertThat(previousNextPair.next()).isEqualTo("post-9");
 
-        previousNextPair = PostFinderImpl.postPreviousNextPair(postNames, "post-9");
-        assertThat(previousNextPair.getLeft()).isEqualTo("post-8");
-        assertThat(previousNextPair.getRight()).isNull();
+        previousNextPair = PostFinderImpl.findPostNavigation(postNames, "post-9");
+        assertThat(previousNextPair.prev()).isEqualTo("post-8");
+        assertThat(previousNextPair.next()).isNull();
     }
 
     List<Post> postsForArchives() {
@@ -252,5 +215,22 @@ class PostFinderImplTest {
         postStatus.setExcerpt("hello world!");
         post.setStatus(postStatus);
         return post;
+    }
+
+    @Nested
+    class PostQueryTest {
+
+        @Test
+        void toPageRequestTest() {
+            var query = new PostFinderImpl.PostQuery();
+            var result = query.toPageRequest();
+            assertThat(result.getSort()).isEqualTo(PostFinderImpl.defaultSort());
+
+            query.setSort(List.of("spec.publishTime,desc"));
+            result = query.toPageRequest();
+            assertThat(result.getSort())
+                .isEqualTo(Sort.by(Sort.Order.desc("spec.publishTime"))
+                    .and(PostFinderImpl.defaultSort()));
+        }
     }
 }

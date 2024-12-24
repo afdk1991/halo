@@ -21,4 +21,5 @@ public interface SinglePageFinder {
     Mono<ContentVo> content(String pageName);
 
     Mono<ListResult<ListedSinglePageVo>> list(@Nullable Integer page, @Nullable Integer size);
+
 }

@@ -1,10 +1,11 @@
 server:
   port: 8090
+  forward-headers-strategy: native
   compression:
     enabled: true
   error:
     whitelabel:
-        enabled: false
+      enabled: false
 spring:
   output:
     ansi:
@@ -26,17 +27,26 @@ spring:
       cache:
         cachecontrol:
           max-age: 365d
+  thymeleaf:
+    reactive:
+      maxChunkSize: 8KB
+  cache:
+    type: caffeine
+    caffeine:
+      spec: expireAfterAccess=1h, maximumSize=10000
 
 halo:
-  external-url: "/"
   work-dir: ${user.home}/.halo2
-  plugin:
-    plugins-root: ${halo.work-dir}/plugins
   attachment:
     resource-mappings:
       - pathPattern: /upload/**
         locations:
           - migrate-from-1.x
+  security:
+    password-reset-methods:
+      - name: email
+        href: /password-reset/email
+        icon: /images/password-reset-methods/email.svg
 
 springdoc:
   api-docs:
@@ -56,8 +66,10 @@ management:
   endpoints:
     web:
       exposure:
-          include: ["health", "info", "startup", "globalinfo", "logfile"]
+        include: "*"
   endpoint:
+    shutdown:
+      enabled: true
     health:
       probes:
         enabled: true
@@ -66,3 +78,34 @@ management:
       enabled: true
     os:
       enabled: true
+
+resilience4j.ratelimiter:
+  configs:
+    authentication:
+      limitForPeriod: 3
+      limitRefreshPeriod: 1m
+      timeoutDuration: 0
+    comment-creation:
+      limitForPeriod: 10
+      limitRefreshPeriod: 1m
+      timeoutDuration: 0s
+    signup:
+      limitForPeriod: 3
+      limitRefreshPeriod: 1h
+      timeoutDuration: 0s
+    send-email-verification-code:
+      limitForPeriod: 1
+      limitRefreshPeriod: 1m
+      timeoutDuration: 0s
+    verify-email:
+      limitForPeriod: 3
+      limitRefreshPeriod: 1h
+      timeoutDuration: 0s
+    send-password-reset-email:
+      limitForPeriod: 10
+      limitRefreshPeriod: 1m
+      timeoutDuration: 0s
+    password-reset-verification:
+      limitForPeriod: 10
+      limitRefreshPeriod: 1m
+      timeoutDuration: 0s

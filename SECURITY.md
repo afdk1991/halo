@@ -11,7 +11,8 @@ Halo currently supports the versions listed below, where as:
 | Version | Supported          |
 | ------- | ------------------ |
 | 0.x     | :x:                |
-| 1.x     | :white_check_mark: |
+| 1.x     | :x:                |
+| 2.x     | :white_check_mark: |
 
 ## Reporting a Vulnerability
 
@@ -35,7 +36,7 @@ Vulnerability has been observed in...
     - `uname -a`: 
     - `java -version`: 
  
-- Affected by Halo version(s) [e.g. v1.0.2]: 
+- Affected by Halo version(s) [e.g. v2.4.0]: 
 - Vulnerability self-scoring [1-10]: 
 - Would you like to be attributed? (Whether you agree us to appreciate you by putting your name in the CHANGELOG of the next fix release) [n/y]: 
 ```

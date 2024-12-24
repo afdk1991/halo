@@ -1,5 +1,6 @@
 package run.halo.app.core.extension;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
 import static java.util.Arrays.compare;
 import static run.halo.app.core.extension.Role.GROUP;
 import static run.halo.app.core.extension.Role.KIND;
@@ -37,6 +38,8 @@ public class Role extends AbstractExtension {
 
     public static final String SYSTEM_RESERVED_LABELS =
         "rbac.authorization.halo.run/system-reserved";
+    public static final String HIDDEN_LABEL_NAME = "halo.run/hidden";
+    public static final String TEMPLATE_LABEL_NAME = "halo.run/role-template";
     public static final String UI_PERMISSIONS_AGGREGATED_ANNO =
         "rbac.authorization.halo.run/ui-permissions-aggregated";
 
@@ -44,7 +47,7 @@ public class Role extends AbstractExtension {
     public static final String VERSION = "v1alpha1";
     public static final String KIND = "Role";
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     List<PolicyRule> rules;
 
     /**

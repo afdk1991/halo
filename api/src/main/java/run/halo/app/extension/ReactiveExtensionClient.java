@@ -2,8 +2,10 @@ package run.halo.app.extension;
 
 import java.util.Comparator;
 import java.util.function.Predicate;
+import org.springframework.data.domain.Sort;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import run.halo.app.extension.index.IndexedQueryEngine;
 
 /**
  * ExtensionClient is an interface which contains some operations on Extension instead of
@@ -39,6 +41,11 @@ public interface ReactiveExtensionClient {
     <E extends Extension> Mono<ListResult<E>> list(Class<E> type, Predicate<E> predicate,
         Comparator<E> comparator, int page, int size);
 
+    <E extends Extension> Flux<E> listAll(Class<E> type, ListOptions options, Sort sort);
+
+    <E extends Extension> Mono<ListResult<E>> listBy(Class<E> type, ListOptions options,
+        PageRequest pageable);
+
     /**
      * Fetches Extension by its type and name.
      *
@@ -52,6 +59,8 @@ public interface ReactiveExtensionClient {
     Mono<Unstructured> fetch(GroupVersionKind gvk, String name);
 
     <E extends Extension> Mono<E> get(Class<E> type, String name);
+
+    Mono<JsonExtension> getJsonExtension(GroupVersionKind gvk, String name);
 
     /**
      * Creates an Extension.
@@ -79,6 +88,8 @@ public interface ReactiveExtensionClient {
      * @param <E> is Extension type.
      */
     <E extends Extension> Mono<E> delete(E extension);
+
+    IndexedQueryEngine indexedQueryEngine();
 
     void watch(Watcher watcher);
 

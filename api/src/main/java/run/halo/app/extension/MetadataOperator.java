@@ -1,5 +1,7 @@
 package run.halo.app.extension;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -17,7 +19,7 @@ import java.util.Set;
 @Schema(implementation = Metadata.class)
 public interface MetadataOperator {
 
-    @Schema(name = "name", description = "Metadata name", required = true)
+    @Schema(name = "name", description = "Metadata name", requiredMode = REQUIRED)
     @JsonProperty("name")
     String getName();
 
@@ -25,11 +27,11 @@ public interface MetadataOperator {
         + "according to the given generateName field")
     String getGenerateName();
 
-    @Schema(name = "labels", nullable = true)
+    @Schema(name = "labels")
     @JsonProperty("labels")
     Map<String, String> getLabels();
 
-    @Schema(name = "annotations", nullable = true)
+    @Schema(name = "annotations")
     @JsonProperty("annotations")
     Map<String, String> getAnnotations();
 

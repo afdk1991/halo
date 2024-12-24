@@ -1,6 +1,7 @@
 package run.halo.app.infra.exception.handlers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.csrf;
 
 import java.util.Locale;
 import org.junit.jupiter.api.AfterEach;
@@ -10,12 +11,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -105,13 +108,28 @@ class I18nExceptionTest {
 
     @Test
     void shouldGetErrorIfThrowingGeneralException() {
+        // problem reason will be a fixed prompt when internal server error occurred.
         webClient.get().uri("/response-entity/general-error")
             .exchange()
             .expectStatus().isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR)
             .expectBody(ProblemDetail.class)
             .value(problemDetail -> {
                 assertEquals("Internal Server Error", problemDetail.getTitle());
-                assertEquals("Something went wrong",
+                assertEquals("Something went wrong, please try again later.",
+                    problemDetail.getDetail());
+            });
+    }
+
+    @Test
+    void shouldGetConflictError() {
+        webClient.mutate().apply(csrf()).build()
+            .put().uri("/response-entity/conflict-error")
+            .exchange()
+            .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+            .expectBody(ProblemDetail.class)
+            .value(problemDetail -> {
+                assertEquals("Conflict", problemDetail.getTitle());
+                assertEquals("Conflict detected.",
                     problemDetail.getDetail());
             });
     }
@@ -155,6 +173,10 @@ class I18nExceptionTest {
                 throw new GeneralException("Something went wrong");
             }
 
+            @PutMapping("/conflict-error")
+            ResponseEntity<String> throwConflictException() {
+                throw new ConcurrencyFailureException("Conflict detected");
+            }
         }
     }
 

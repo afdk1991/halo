@@ -7,6 +7,9 @@ import org.springframework.util.Assert;
 public enum MetadataUtil {
     ;
 
+    public static final String SYSTEM_FINALIZER = "system-protection";
+    public static final String HIDDEN_LABEL = "halo.run/hidden";
+
     /**
      * Gets extension metadata labels null safe.
      *

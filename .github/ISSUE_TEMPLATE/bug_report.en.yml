@@ -2,51 +2,54 @@ name: Bug Report
 description: File a bug report
 labels: [bug]
 body:
-  - type: markdown
+  - type: checkboxes
     id: preface
     attributes:
-      value: "Thanks for taking the time to fill out this bug report!"
+      label: Prerequisites
+      description: Thank you for taking the time to fill out this issue report! Before we begin, we highly recommend reading through the [Open Source Guides](https://opensource.guide/), which will greatly improve our mutual efficiency.
+      options:
+        - label: I have searched for related issues in the [issues](https://github.com/halo-dev/halo/issues) list.
+          required: true
+        - label: "This is an issue with the Halo project itself. If it is not an issue with the project itself(For example: Installation and deployment issues.), it is recommended to submit it in the [Discussions](https://github.com/halo-dev/halo/discussions)."
+          required: true
+        - label: I have tried disabling all plugins to rule out plugins as the cause of the problem.
+          required: true
+        - label: If it is an issue with plugins and themes, please submit it in the respective plugin and theme repositories.
+          required: true
   - type: markdown
     id: environment
     attributes:
       value: "## Environment"
-  - type: input
-    id: version
+  - type: textarea
+    id: system-information
+    attributes:
+      label: "System information"
+      description: "Access the actuator page of the Console, click the copy button in the upper right corner, and paste the information here."
+      placeholder: |
+        - External url: https://demo.halo.run
+        - Start time: 2024-07-21 14:50
+        - Version: 2.x.x
+        - Build time: 2024-07-15 18:19
+        - Git Commit: 6d4bedd
+        - Java: IBM Semeru Runtime Open Edition / ...
+        - Database: PostgreSQL / 16.3 ...
+        - Operating system: Linux / 5.15.0-88 ...
+        - Activated theme: ...
+        - Enabled plugins:
+            - ...
     validations:
       required: true
-    attributes:
-      label: What is version of Halo has the issue?
   - type: dropdown
-    id: database
+    id: operation-method
     validations:
       required: true
     attributes:
-      label: "What database are you using?"
-      options:
-        - H2
-        - PostgreSQL
-        - MySQL 5.7
-        - MySQL 8.x
-        - MariaDB
-        - Other
-  - type: dropdown
-    id: deployment-method
-    validations:
-      required: true
-    attributes:
-      label: "What is your deployment method?"
+      label: "What is the project operation method?"
       options:
         - Docker
         - Docker Compose
         - Fat Jar
-  - type: input
-    id: site-url
-    attributes:
-      label: "Your site address."
-      description: "Note your online address, if possible."
-      placeholder: "ex. https://halo.run"
-    validations:
-      required: false
+        - Source Code
   - type: markdown
     id: details
     attributes:
@@ -55,9 +58,17 @@ body:
     id: what-happened
     attributes:
       label: "What happened?"
-      description: "Also tell us, what did you expect to happen?"
+      description: "For ease of management, please do not report multiple unrelated issues under the same issue."
     validations:
       required: true
+  - type: textarea
+    id: reproduce-steps
+    attributes:
+      label: "Reproduce Steps"
+      description: "If it can be consistently reproduced, please provide detailed steps."
+      placeholder: |
+        1. Open '...'
+        2. Click '...'
   - type: textarea
     id: logs
     attributes:

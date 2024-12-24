@@ -16,7 +16,6 @@ import run.halo.app.extension.AbstractExtension;
 import run.halo.app.extension.GVK;
 import run.halo.app.extension.GroupVersionKind;
 import run.halo.app.extension.MetadataOperator;
-import run.halo.app.extension.MetadataUtil;
 import run.halo.app.infra.ConditionList;
 
 /**
@@ -35,12 +34,25 @@ public class Post extends AbstractExtension {
 
     public static final String KIND = "Post";
 
+    public static final String REQUIRE_SYNC_ON_STARTUP_INDEX_NAME = "requireSyncOnStartup";
+
     public static final GroupVersionKind GVK = GroupVersionKind.fromExtension(Post.class);
 
     public static final String CATEGORIES_ANNO = "content.halo.run/categories";
     public static final String LAST_RELEASED_SNAPSHOT_ANNO =
         "content.halo.run/last-released-snapshot";
-    public static final String TAGS_ANNO = "content.halo.run/tags";
+    public static final String LAST_ASSOCIATED_TAGS_ANNO = "content.halo.run/last-associated-tags";
+    public static final String LAST_ASSOCIATED_CATEGORIES_ANNO =
+        "content.halo.run/last-associated-categories";
+
+    public static final String STATS_ANNO = "content.halo.run/stats";
+
+    /**
+     * <p>The key of the label that indicates that the post is scheduled to be published.</p>
+     * <p>Can be used to query posts that are scheduled to be published.</p>
+     */
+    public static final String SCHEDULING_PUBLISH_LABEL = "content.halo.run/scheduling-publish";
+
     public static final String DELETED_LABEL = "content.halo.run/deleted";
     public static final String PUBLISHED_LABEL = "content.halo.run/published";
     public static final String OWNER_LABEL = "content.halo.run/owner";
@@ -79,6 +91,15 @@ public class Post extends AbstractExtension {
     public static boolean isPublished(MetadataOperator metadata) {
         var labels = metadata.getLabels();
         return labels != null && parseBoolean(labels.getOrDefault(PUBLISHED_LABEL, "false"));
+    }
+
+    public static boolean isRecycled(MetadataOperator metadata) {
+        var labels = metadata.getLabels();
+        return labels != null && parseBoolean(labels.getOrDefault(DELETED_LABEL, "false"));
+    }
+
+    public static boolean isPublic(PostSpec spec) {
+        return spec.getVisible() == null || VisibleEnum.PUBLIC.equals(spec.getVisible());
     }
 
     @Data
@@ -136,7 +157,6 @@ public class Post extends AbstractExtension {
 
     @Data
     public static class PostStatus {
-        @Schema(requiredMode = RequiredMode.REQUIRED)
         private String phase;
 
         @Schema
@@ -152,7 +172,14 @@ public class Post extends AbstractExtension {
 
         private List<String> contributors;
 
+        /**
+         * see {@link Category.CategorySpec#isHideFromList()}.
+         */
+        private Boolean hideFromList;
+
         private Instant lastModifyTime;
+
+        private Long observedVersion;
 
         @JsonIgnore
         public ConditionList getConditionsOrDefault() {
@@ -213,60 +240,5 @@ public class Post extends AbstractExtension {
             }
             return null;
         }
-    }
-
-    @Data
-    public static class CompactPost {
-        private String name;
-
-        private VisibleEnum visible;
-
-        private Boolean published;
-
-        public static Builder builder() {
-            return new Builder();
-        }
-
-        /**
-         * <p>Compact post builder.</p>
-         * <p>Can not replace with lombok builder.</p>
-         * <p>The class used by subclasses of {@link AbstractExtension} must have a no-args
-         * constructor.</p>
-         */
-        public static class Builder {
-            private String name;
-
-            private VisibleEnum visible;
-
-            private Boolean published;
-
-            public Builder name(String name) {
-                this.name = name;
-                return this;
-            }
-
-            public Builder visible(VisibleEnum visible) {
-                this.visible = visible;
-                return this;
-            }
-
-            public Builder published(Boolean published) {
-                this.published = published;
-                return this;
-            }
-
-            public CompactPost build() {
-                CompactPost compactPost = new CompactPost();
-                compactPost.setName(name);
-                compactPost.setVisible(visible);
-                compactPost.setPublished(published);
-                return compactPost;
-            }
-        }
-    }
-
-    public static void changePublishedState(Post post, boolean value) {
-        Map<String, String> labels = MetadataUtil.nullSafeLabels(post);
-        labels.put(PUBLISHED_LABEL, String.valueOf(value));
     }
 }

@@ -1,9 +1,23 @@
 package run.halo.app.content.comment;
 
-import io.swagger.v3.oas.annotations.media.Schema;
+import static org.springdoc.core.fn.builders.parameter.Builder.parameterBuilder;
+import static org.springframework.data.domain.Sort.Order.desc;
+import static run.halo.app.extension.index.query.QueryFactory.contains;
+import static run.halo.app.extension.index.query.QueryFactory.equal;
+
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
+import java.util.Optional;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.util.MultiValueMap;
+import org.springdoc.core.fn.builders.operation.Builder;
+import org.springframework.data.domain.Sort;
+import org.springframework.lang.Nullable;
+import org.springframework.web.reactive.function.server.ServerRequest;
+import run.halo.app.core.extension.User;
+import run.halo.app.core.extension.content.Comment;
+import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.router.IListRequest;
+import run.halo.app.extension.router.QueryParamBuildUtil;
+import run.halo.app.extension.router.SortableRequest;
 
 /**
  * Query criteria for comment list.
@@ -11,75 +25,75 @@ import run.halo.app.extension.router.IListRequest;
  * @author guqing
  * @since 2.0.0
  */
-public class CommentQuery extends IListRequest.QueryListRequest {
+public class CommentQuery extends SortableRequest {
 
-    public CommentQuery(MultiValueMap<String, String> queryParams) {
-        super(queryParams);
+    public CommentQuery(ServerRequest request) {
+        super(request.exchange());
     }
 
-    @Schema(description = "Comments filtered by keyword.")
+    @Nullable
     public String getKeyword() {
-        String keyword = queryParams.getFirst("keyword");
-        return StringUtils.isBlank(keyword) ? null : keyword;
+        return queryParams.getFirst("keyword");
     }
 
-    @Schema(description = "Comments approved.")
-    public Boolean getApproved() {
-        return convertBooleanOrNull(queryParams.getFirst("approved"));
-    }
-
-    @Schema(description = "The comment is hidden from the theme side.")
-    public Boolean getHidden() {
-        return convertBooleanOrNull(queryParams.getFirst("hidden"));
-    }
-
-    @Schema(description = "Send notifications when there are new replies.")
-    public Boolean getAllowNotification() {
-        return convertBooleanOrNull(queryParams.getFirst("allowNotification"));
-    }
-
-    @Schema(description = "Comment top display.")
-    public Boolean getTop() {
-        return convertBooleanOrNull(queryParams.getFirst("top"));
-    }
-
-    @Schema(description = "Commenter kind.")
+    @Nullable
     public String getOwnerKind() {
-        String ownerKind = queryParams.getFirst("ownerKind");
-        return StringUtils.isBlank(ownerKind) ? null : ownerKind;
+        return queryParams.getFirst("ownerKind");
     }
 
-    @Schema(description = "Commenter name.")
+    @Nullable
     public String getOwnerName() {
-        String ownerName = queryParams.getFirst("ownerName");
-        return StringUtils.isBlank(ownerName) ? null : ownerName;
+        return queryParams.getFirst("ownerName");
     }
 
-    @Schema(description = "Comment subject kind.")
-    public String getSubjectKind() {
-        String subjectKind = queryParams.getFirst("subjectKind");
-        return StringUtils.isBlank(subjectKind) ? null : subjectKind;
+    @Override
+    public Sort getSort() {
+        // set default sort by last reply time
+        return super.getSort().and(Sort.by(desc("status.lastReplyTime")));
     }
 
-    @Schema(description = "Comment subject name.")
-    public String getSubjectName() {
-        String subjectName = queryParams.getFirst("subjectName");
-        return StringUtils.isBlank(subjectName) ? null : subjectName;
+    /**
+     * Convert to list options.
+     */
+    @Override
+    public ListOptions toListOptions() {
+        var builder = ListOptions.builder(super.toListOptions());
+
+        Optional.ofNullable(getKeyword())
+            .filter(StringUtils::isNotBlank)
+            .ifPresent(keyword -> builder.andQuery(contains("spec.raw", keyword)));
+
+        Optional.ofNullable(getOwnerName())
+            .filter(StringUtils::isNotBlank)
+            .ifPresent(ownerName -> {
+                var ownerKind = Optional.ofNullable(getOwnerKind())
+                    .filter(StringUtils::isNotBlank)
+                    .orElse(User.KIND);
+                builder.andQuery(
+                    equal("spec.owner", Comment.CommentOwner.ownerIdentity(ownerKind, ownerName))
+                );
+            });
+
+        return builder.build();
     }
 
-    @Schema(description = "Comment collation.")
-    public CommentSorter getSort() {
-        String sort = queryParams.getFirst("sort");
-        return CommentSorter.convertFrom(sort);
-    }
-
-    @Schema(description = "ascending order If it is true; otherwise, it is in descending order.")
-    public Boolean getSortOrder() {
-        String sortOrder = queryParams.getFirst("sortOrder");
-        return convertBooleanOrNull(sortOrder);
-    }
-
-    private Boolean convertBooleanOrNull(String value) {
-        return StringUtils.isBlank(value) ? null : Boolean.parseBoolean(value);
+    public static void buildParameters(Builder builder) {
+        IListRequest.buildParameters(builder);
+        builder.parameter(QueryParamBuildUtil.sortParameter())
+            .parameter(parameterBuilder()
+                .in(ParameterIn.QUERY)
+                .name("keyword")
+                .description("Comments filtered by keyword.")
+                .implementation(String.class))
+            .parameter(parameterBuilder()
+                .in(ParameterIn.QUERY)
+                .name("ownerKind")
+                .description("Commenter kind.")
+                .implementation(String.class))
+            .parameter(parameterBuilder()
+                .in(ParameterIn.QUERY)
+                .name("ownerName")
+                .description("Commenter name.")
+                .implementation(String.class));
     }
 }

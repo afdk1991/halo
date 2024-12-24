@@ -1,8 +1,11 @@
 package run.halo.app.content;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 import lombok.Data;
+import lombok.experimental.Accessors;
 import run.halo.app.core.extension.content.Category;
 import run.halo.app.core.extension.content.Post;
 import run.halo.app.core.extension.content.Tag;
@@ -15,23 +18,24 @@ import run.halo.app.core.extension.content.Tag;
  * @since 2.0.0
  */
 @Data
+@Accessors(chain = true)
 public class ListedPost {
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private Post post;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private List<Category> categories;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private List<Tag> tags;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private List<Contributor> contributors;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private Contributor owner;
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private Stats stats;
 }

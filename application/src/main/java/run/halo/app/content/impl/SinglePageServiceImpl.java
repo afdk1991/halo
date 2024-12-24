@@ -1,20 +1,17 @@
 package run.halo.app.content.impl;
 
-import static run.halo.app.extension.router.selector.SelectorUtil.labelAndFieldSelectorToPredicate;
-
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Collection;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
-import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
+import org.springframework.web.server.ServerWebInputException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
@@ -23,21 +20,22 @@ import run.halo.app.content.ContentRequest;
 import run.halo.app.content.ContentWrapper;
 import run.halo.app.content.Contributor;
 import run.halo.app.content.ListedSinglePage;
+import run.halo.app.content.ListedSnapshotDto;
 import run.halo.app.content.SinglePageQuery;
 import run.halo.app.content.SinglePageRequest;
 import run.halo.app.content.SinglePageService;
-import run.halo.app.content.SinglePageSorter;
 import run.halo.app.content.Stats;
+import run.halo.app.core.counter.CounterService;
+import run.halo.app.core.counter.MeterUtils;
 import run.halo.app.core.extension.content.Post;
 import run.halo.app.core.extension.content.SinglePage;
-import run.halo.app.core.extension.service.UserService;
+import run.halo.app.core.extension.content.Snapshot;
+import run.halo.app.core.user.service.UserService;
 import run.halo.app.extension.ListResult;
 import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.extension.Ref;
 import run.halo.app.infra.Condition;
 import run.halo.app.infra.ConditionStatus;
-import run.halo.app.metrics.CounterService;
-import run.halo.app.metrics.MeterUtils;
 
 /**
  * Single page service implementation.
@@ -80,20 +78,24 @@ public class SinglePageServiceImpl extends AbstractContentService implements Sin
     }
 
     @Override
+    public Flux<ListedSnapshotDto> listSnapshots(String pageName) {
+        return client.fetch(SinglePage.class, pageName)
+            .flatMapMany(page -> listSnapshotsBy(Ref.of(page)))
+            .map(ListedSnapshotDto::from);
+    }
+
+    @Override
     public Mono<ListResult<ListedSinglePage>> list(SinglePageQuery query) {
-        Comparator<SinglePage> comparator =
-            SinglePageSorter.from(query.getSort(), query.getSortOrder());
-        return client.list(SinglePage.class, pageListPredicate(query),
-                comparator, query.getPage(), query.getSize())
-            .flatMap(listResult -> Flux.fromStream(
-                        listResult.get().map(this::getListedSinglePage)
-                    )
-                    .concatMap(Function.identity())
-                    .collectList()
-                    .map(listedSinglePages -> new ListResult<>(listResult.getPage(),
-                        listResult.getSize(),
-                        listResult.getTotal(), listedSinglePages)
-                    )
+        return client.listBy(SinglePage.class, query.toListOptions(), query.toPageRequest())
+            .flatMap(listResult -> Flux.fromStream(listResult.get().map(this::getListedSinglePage))
+                .flatMapSequential(Function.identity())
+                .collectList()
+                .map(listedSinglePages -> new ListResult<>(
+                    listResult.getPage(),
+                    listResult.getSize(),
+                    listResult.getTotal(),
+                    listedSinglePages)
+                )
             );
     }
 
@@ -103,17 +105,15 @@ public class SinglePageServiceImpl extends AbstractContentService implements Sin
                 () -> {
                     SinglePage page = pageRequest.page();
                     return getContextUsername()
-                        .map(username -> {
-                            page.getSpec().setOwner(username);
-                            return page;
-                        })
-                        .defaultIfEmpty(page);
+                        .doOnNext(username -> page.getSpec().setOwner(username))
+                        .thenReturn(page);
                 }
             )
             .flatMap(client::create)
             .flatMap(page -> {
                 var contentRequest =
                     new ContentRequest(Ref.of(page), page.getSpec().getHeadSnapshot(),
+                        null,
                         pageRequest.content().raw(), pageRequest.content().content(),
                         pageRequest.content().rawType());
                 return draftContent(page.getSpec().getBaseSnapshot(), contentRequest)
@@ -167,85 +167,116 @@ public class SinglePageServiceImpl extends AbstractContentService implements Sin
                     return client.update(page);
                 });
         }
-        return Mono.defer(() -> updateContent(baseSnapshot, pageRequest.contentRequest())
-                .flatMap(contentWrapper -> {
-                    page.getSpec().setHeadSnapshot(contentWrapper.getSnapshotName());
-                    return client.update(page);
-                }))
-            .retryWhen(Retry.backoff(5, Duration.ofMillis(100))
-                .filter(throwable -> throwable instanceof OptimisticLockingFailureException));
+        return updateContent(baseSnapshot, pageRequest.contentRequest())
+            .flatMap(contentWrapper -> {
+                page.getSpec().setHeadSnapshot(contentWrapper.getSnapshotName());
+                return client.update(page);
+            });
     }
 
-    Predicate<SinglePage> pageListPredicate(SinglePageQuery query) {
-        Predicate<SinglePage> paramPredicate = singlePage -> contains(query.getContributors(),
-            singlePage.getStatusOrDefault().getContributors());
-
-        String keyword = query.getKeyword();
-        if (keyword != null) {
-            paramPredicate = paramPredicate.and(page -> {
-                String excerpt = page.getStatusOrDefault().getExcerpt();
-                return StringUtils.containsIgnoreCase(excerpt, keyword)
-                    || StringUtils.containsIgnoreCase(page.getSpec().getSlug(), keyword)
-                    || StringUtils.containsIgnoreCase(page.getSpec().getTitle(), keyword);
+    @Override
+    public Mono<SinglePage> revertToSpecifiedSnapshot(String pageName, String snapshotName) {
+        return client.get(SinglePage.class, pageName)
+            .filter(page -> {
+                var head = page.getSpec().getHeadSnapshot();
+                return !StringUtils.equals(head, snapshotName);
+            })
+            .flatMap(page -> {
+                var baseSnapshot = page.getSpec().getBaseSnapshot();
+                return getContent(snapshotName, baseSnapshot)
+                    .map(content -> ContentRequest.builder()
+                        .subjectRef(Ref.of(page))
+                        .headSnapshotName(page.getSpec().getHeadSnapshot())
+                        .content(content.getContent())
+                        .raw(content.getRaw())
+                        .rawType(content.getRawType())
+                        .build()
+                    )
+                    .flatMap(contentRequest -> draftContent(baseSnapshot, contentRequest))
+                    .flatMap(content -> {
+                        page.getSpec().setHeadSnapshot(content.getSnapshotName());
+                        return publishPageWithRetry(page);
+                    });
             });
-        }
+    }
 
-        Post.PostPhase publishPhase = query.getPublishPhase();
-        if (publishPhase != null) {
-            paramPredicate = paramPredicate.and(page -> {
-                if (Post.PostPhase.PENDING_APPROVAL.equals(publishPhase)) {
-                    return !page.isPublished()
-                        && Post.PostPhase.PENDING_APPROVAL.name()
-                        .equalsIgnoreCase(page.getStatusOrDefault().getPhase());
+    @Override
+    public Mono<ContentWrapper> deleteContent(String pageName, String snapshotName) {
+        return client.get(SinglePage.class, pageName)
+            .flatMap(page -> {
+                var headSnapshotName = page.getSpec().getHeadSnapshot();
+                if (StringUtils.equals(headSnapshotName, snapshotName)) {
+                    return updatePageWithRetry(page, record -> {
+                        // update head to release
+                        page.getSpec().setHeadSnapshot(page.getSpec().getReleaseSnapshot());
+                        return record;
+                    });
                 }
-                // published
-                if (Post.PostPhase.PUBLISHED.equals(publishPhase)) {
-                    return page.isPublished();
+                return Mono.just(page);
+            })
+            .flatMap(page -> {
+                var baseSnapshotName = page.getSpec().getBaseSnapshot();
+                var releaseSnapshotName = page.getSpec().getReleaseSnapshot();
+                if (StringUtils.equals(releaseSnapshotName, snapshotName)) {
+                    return Mono.error(new ServerWebInputException(
+                        "The snapshot to delete is the release snapshot, please"
+                            + " revert to another snapshot first."));
                 }
-                // draft
-                return !page.isPublished();
+                if (StringUtils.equals(baseSnapshotName, snapshotName)) {
+                    return Mono.error(
+                        new ServerWebInputException("The first snapshot cannot be deleted."));
+                }
+                return client.fetch(Snapshot.class, snapshotName)
+                    .flatMap(client::delete)
+                    .flatMap(deleted -> restoredContent(baseSnapshotName, deleted));
             });
-        }
+    }
 
-        Post.VisibleEnum visible = query.getVisible();
-        if (visible != null) {
-            paramPredicate =
-                paramPredicate.and(post -> visible.equals(post.getSpec().getVisible()));
-        }
+    private Mono<SinglePage> updatePageWithRetry(SinglePage page, UnaryOperator<SinglePage> func) {
+        return client.update(func.apply(page))
+            .onErrorResume(OptimisticLockingFailureException.class,
+                e -> Mono.defer(() -> client.get(SinglePage.class, page.getMetadata().getName())
+                        .map(func)
+                        .flatMap(client::update)
+                    )
+                    .retryWhen(Retry.backoff(8, Duration.ofMillis(100))
+                        .filter(OptimisticLockingFailureException.class::isInstance))
+            );
+    }
 
-        Predicate<SinglePage> predicate = labelAndFieldSelectorToPredicate(query.getLabelSelector(),
-            query.getFieldSelector());
-        return predicate.and(paramPredicate);
+    private Mono<SinglePage> publish(SinglePage singlePage) {
+        var spec = singlePage.getSpec();
+        spec.setPublish(true);
+        if (spec.getHeadSnapshot() == null) {
+            spec.setHeadSnapshot(spec.getBaseSnapshot());
+        }
+        spec.setReleaseSnapshot(spec.getHeadSnapshot());
+        return client.update(singlePage);
+    }
+
+    Mono<SinglePage> publishPageWithRetry(SinglePage page) {
+        return publish(page)
+            .onErrorResume(OptimisticLockingFailureException.class,
+                e -> Mono.defer(() -> client.get(SinglePage.class, page.getMetadata().getName())
+                        .flatMap(this::publish))
+                    .retryWhen(Retry.backoff(8, Duration.ofMillis(100))
+                        .filter(OptimisticLockingFailureException.class::isInstance))
+            );
     }
 
     private Mono<ListedSinglePage> getListedSinglePage(SinglePage singlePage) {
         Assert.notNull(singlePage, "The singlePage must not be null.");
-        return Mono.just(singlePage)
-            .map(sp -> {
-                ListedSinglePage listedSinglePage = new ListedSinglePage();
-                listedSinglePage.setPage(singlePage);
-                return listedSinglePage;
-            })
-            .flatMap(sp -> fetchStats(singlePage)
-                .doOnNext(sp::setStats)
-                .thenReturn(sp)
-            )
-            .flatMap(lsp ->
-                setContributors(singlePage.getStatusOrDefault().getContributors(), lsp))
-            .flatMap(lsp -> setOwner(singlePage.getSpec().getOwner(), lsp));
-    }
+        var listedSinglePage = new ListedSinglePage()
+            .setPage(singlePage);
 
-    private Mono<ListedSinglePage> setContributors(List<String> usernames,
-        ListedSinglePage singlePage) {
-        return listContributors(usernames)
+        var statsMono = fetchStats(singlePage)
+            .doOnNext(listedSinglePage::setStats);
+
+        var contributorsMono = listContributors(singlePage.getStatusOrDefault().getContributors())
             .collectList()
-            .doOnNext(singlePage::setContributors)
-            .map(contributors -> singlePage)
-            .defaultIfEmpty(singlePage);
-    }
+            .doOnNext(listedSinglePage::setContributors);
 
-    private Mono<ListedSinglePage> setOwner(String ownerName, ListedSinglePage page) {
-        return userService.getUserOrGhost(ownerName)
+        var ownerMono = userService.getUserOrGhost(singlePage.getSpec().getOwner())
             .map(user -> {
                 Contributor contributor = new Contributor();
                 contributor.setName(user.getMetadata().getName());
@@ -253,8 +284,9 @@ public class SinglePageServiceImpl extends AbstractContentService implements Sin
                 contributor.setAvatar(user.getSpec().getAvatar());
                 return contributor;
             })
-            .doOnNext(page::setOwner)
-            .thenReturn(page);
+            .doOnNext(listedSinglePage::setOwner);
+        return Mono.when(statsMono, contributorsMono, ownerMono)
+            .thenReturn(listedSinglePage);
     }
 
     Mono<Stats> fetchStats(SinglePage singlePage) {
@@ -284,20 +316,5 @@ public class SinglePageServiceImpl extends AbstractContentService implements Sin
                 contributor.setAvatar(user.getSpec().getAvatar());
                 return contributor;
             });
-    }
-
-    boolean contains(Collection<String> left, List<String> right) {
-        // parameter is null, it means that ignore this condition
-        if (left == null) {
-            return true;
-        }
-        // else, it means that right is empty
-        if (left.isEmpty()) {
-            return right.isEmpty();
-        }
-        if (right == null) {
-            return false;
-        }
-        return right.stream().anyMatch(left::contains);
     }
 }

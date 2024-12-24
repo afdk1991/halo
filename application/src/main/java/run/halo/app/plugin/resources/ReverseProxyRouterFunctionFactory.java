@@ -4,31 +4,38 @@ import static org.springframework.http.MediaType.ALL;
 import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
 import static org.springframework.web.reactive.function.server.RequestPredicates.accept;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.time.Instant;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.pf4j.PluginManager;
+import org.springframework.boot.autoconfigure.web.WebProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
+import org.springframework.http.CacheControl;
 import org.springframework.http.server.PathContainer;
 import org.springframework.lang.NonNull;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.util.Assert;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import org.springframework.web.reactive.resource.NoResourceFoundException;
 import org.springframework.web.util.pattern.PathPatternParser;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import run.halo.app.core.extension.ReverseProxy;
 import run.halo.app.core.extension.ReverseProxy.FileReverseProxyProvider;
 import run.halo.app.core.extension.ReverseProxy.ReverseProxyRule;
 import run.halo.app.infra.exception.NotFoundException;
 import run.halo.app.infra.utils.PathUtils;
-import run.halo.app.plugin.ExtensionContextRegistry;
-import run.halo.app.plugin.HaloPluginManager;
 import run.halo.app.plugin.PluginConst;
 
 /**
@@ -44,8 +51,9 @@ import run.halo.app.plugin.PluginConst;
 @AllArgsConstructor
 public class ReverseProxyRouterFunctionFactory {
 
-    private final HaloPluginManager haloPluginManager;
+    private final PluginManager pluginManager;
     private final ApplicationContext applicationContext;
+    private final WebProperties webProperties;
 
     /**
      * <p>Create {@link RouterFunction} according to the {@link ReverseProxy} custom resource
@@ -56,44 +64,68 @@ public class ReverseProxyRouterFunctionFactory {
      * @param pluginName plugin name(nullable if system)
      * @return A reverse proxy RouterFunction handle(nullable)
      */
-    @NonNull
-    public Mono<RouterFunction<ServerResponse>> create(ReverseProxy reverseProxy,
-        String pluginName) {
+    @Nullable
+    public RouterFunction<ServerResponse> create(ReverseProxy reverseProxy, String pluginName) {
         return createReverseProxyRouterFunction(reverseProxy, nullSafePluginName(pluginName));
     }
 
-    private Mono<RouterFunction<ServerResponse>> createReverseProxyRouterFunction(
+    @Nullable
+    private RouterFunction<ServerResponse> createReverseProxyRouterFunction(
         ReverseProxy reverseProxy, @NonNull String pluginName) {
         Assert.notNull(reverseProxy, "The reverseProxy must not be null.");
         var rules = getReverseProxyRules(reverseProxy);
-
-        return rules.map(rule -> {
+        var cacheProperties = webProperties.getResources().getCache();
+        var useLastModified = cacheProperties.isUseLastModified();
+        var cacheControl = cacheProperties.getCachecontrol().toHttpCacheControl();
+        if (cacheControl == null) {
+            cacheControl = CacheControl.empty();
+        }
+        var finalCacheControl = cacheControl;
+        return rules.stream().map(rule -> {
             String routePath = buildRoutePath(pluginName, rule);
             log.debug("Plugin [{}] registered reverse proxy route path [{}]", pluginName,
                 routePath);
             return RouterFunctions.route(GET(routePath).and(accept(ALL)),
                 request -> {
-                    Resource resource =
-                        loadResourceByFileRule(pluginName, rule, request);
+                    var resource = loadResourceByFileRule(pluginName, rule, request);
                     if (!resource.exists()) {
-                        return ServerResponse.notFound().build();
+                        return Mono.error(new NoResourceFoundException(routePath));
                     }
-                    return ServerResponse.ok()
-                        .bodyValue(resource);
+                    if (!useLastModified) {
+                        return ServerResponse.ok()
+                            .cacheControl(finalCacheControl)
+                            .body(BodyInserters.fromResource(resource));
+                    }
+                    Instant lastModified;
+                    try {
+                        lastModified = Instant.ofEpochMilli(resource.lastModified());
+                    } catch (IOException e) {
+                        if (e instanceof FileNotFoundException) {
+                            return Mono.error(new NoResourceFoundException(routePath));
+                        }
+                        return Mono.error(e);
+                    }
+                    return request.checkNotModified(lastModified)
+                        .switchIfEmpty(Mono.defer(
+                            () -> ServerResponse.ok()
+                                .cacheControl(finalCacheControl)
+                                .lastModified(lastModified)
+                                .body(BodyInserters.fromResource(resource)))
+                        );
                 });
-        }).reduce(RouterFunction::and);
+        }).reduce(RouterFunction::and).orElse(null);
     }
 
     private String nullSafePluginName(String pluginName) {
         return pluginName == null ? PluginConst.SYSTEM_PLUGIN_NAME : pluginName;
     }
 
-    private Flux<ReverseProxyRule> getReverseProxyRules(ReverseProxy reverseProxy) {
-        return Flux.fromIterable(reverseProxy.getRules());
+    private List<ReverseProxyRule> getReverseProxyRules(ReverseProxy reverseProxy) {
+        return reverseProxy.getRules();
     }
 
     public static String buildRoutePath(String pluginId, ReverseProxyRule reverseProxyRule) {
-        return PathUtils.combinePath(PluginConst.assertsRoutePrefix(pluginId),
+        return PathUtils.combinePath(PluginConst.assetsRoutePrefix(pluginId),
             reverseProxyRule.path());
     }
 
@@ -137,15 +169,11 @@ public class ReverseProxyRouterFunctionFactory {
     }
 
     private ResourceLoader getResourceLoader(String pluginName) {
-        ExtensionContextRegistry registry = ExtensionContextRegistry.getInstance();
-        if (registry.containsContext(pluginName)) {
-            return registry.getByPluginId(pluginName);
-        }
         if (PluginConst.SYSTEM_PLUGIN_NAME.equals(pluginName)) {
             return applicationContext;
         }
         DefaultResourceLoader resourceLoader =
-            BundleResourceUtils.getResourceLoader(haloPluginManager, pluginName);
+            BundleResourceUtils.getResourceLoader(pluginManager, pluginName);
         if (resourceLoader == null) {
             throw new NotFoundException("Plugin [" + pluginName + "] not found.");
         }

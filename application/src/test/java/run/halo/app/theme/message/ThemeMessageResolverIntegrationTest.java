@@ -13,9 +13,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.util.ResourceUtils;
 import org.springframework.web.reactive.function.server.RequestPredicates;
@@ -24,6 +24,7 @@ import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import run.halo.app.infra.InitializationStateGetter;
 import run.halo.app.theme.ThemeContext;
 import run.halo.app.theme.ThemeResolver;
 
@@ -37,18 +38,22 @@ import run.halo.app.theme.ThemeResolver;
 @AutoConfigureWebTestClient
 public class ThemeMessageResolverIntegrationTest {
 
-    @SpyBean
+    @MockitoSpyBean
     private ThemeResolver themeResolver;
 
     private URL defaultThemeUrl;
 
     private URL otherThemeUrl;
 
+    @MockitoSpyBean
+    private InitializationStateGetter initializationStateGetter;
+
     @Autowired
     private WebTestClient webTestClient;
 
     @BeforeEach
     void setUp() throws FileNotFoundException, URISyntaxException {
+        when(initializationStateGetter.userInitialized()).thenReturn(Mono.just(true));
         defaultThemeUrl = ResourceUtils.getURL("classpath:themes/default");
         otherThemeUrl = ResourceUtils.getURL("classpath:themes/other");
 
@@ -63,21 +68,9 @@ public class ThemeMessageResolverIntegrationTest {
             .exchange()
             .expectStatus()
             .isOk()
-            .expectBody(String.class)
-            .isEqualTo("""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <title>Title</title>
-                </head>
-                <body>
-                index
-                <div>zh</div>
-                <div>欢迎来到首页</div>
-                </body>
-                </html>
-                """);
+            .expectBody()
+            .xpath("/html/body/div[1]").isEqualTo("zh")
+            .xpath("/html/body/div[2]").isEqualTo("欢迎来到首页");
     }
 
     @Test
@@ -87,21 +80,9 @@ public class ThemeMessageResolverIntegrationTest {
             .exchange()
             .expectStatus()
             .isOk()
-            .expectBody(String.class)
-            .isEqualTo("""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <title>Title</title>
-                </head>
-                <body>
-                index
-                <div>en</div>
-                <div>Welcome to the index</div>
-                </body>
-                </html>
-                """);
+            .expectBody()
+            .xpath("/html/body/div[1]").isEqualTo("en")
+            .xpath("/html/body/div[2]").isEqualTo("Welcome to the index");
     }
 
     @Test
@@ -111,21 +92,12 @@ public class ThemeMessageResolverIntegrationTest {
             .exchange()
             .expectStatus()
             .isOk()
-            .expectBody(String.class)
-            .isEqualTo("""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <title>Title</title>
-                </head>
-                <body>
-                index
-                <div>foo</div>
-                <div>欢迎来到首页</div>
-                </body>
-                </html>
-                """);
+            .expectBody()
+            // make sure the "templates/index.properties" file is precedence over the
+            // "i18n/default.properties".
+            .xpath("/html/head/title").isEqualTo("Title from index.properties")
+            .xpath("/html/body/div[1]").isEqualTo("foo")
+            .xpath("/html/body/div[2]").isEqualTo("欢迎来到首页");
     }
 
     @Test
@@ -135,21 +107,11 @@ public class ThemeMessageResolverIntegrationTest {
             .exchange()
             .expectStatus()
             .isOk()
-            .expectBody(String.class)
-            .isEqualTo("""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <title>Title</title>
-                </head>
-                <body>
-                index
-                <div>zh</div>
-                <div>欢迎来到首页</div>
-                </body>
-                </html>
-                """);
+            .expectBody()
+            .xpath("/html/head/title").isEqualTo("来自 index_zh.properties 的标题")
+            .xpath("/html/body/div[1]").isEqualTo("zh")
+            .xpath("/html/body/div[2]").isEqualTo("欢迎来到首页")
+        ;
 
         // For other theme
         when(themeResolver.getTheme(any(ServerWebExchange.class)))
@@ -157,35 +119,16 @@ public class ThemeMessageResolverIntegrationTest {
         webTestClient.get()
             .uri("/index?language=zh")
             .exchange()
-            .expectBody(String.class)
-            .isEqualTo("""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <title>Other theme title</title>
-                </head>
-                <body>
-                <p>Other 首页</p>
-                </body>
-                </html>
-                """);
+            .expectBody()
+            .xpath("/html/head/title").isEqualTo("Other theme title")
+            .xpath("/html/body/p").isEqualTo("Other 首页");
+
         webTestClient.get()
             .uri("/index?language=en")
             .exchange()
-            .expectBody(String.class)
-            .isEqualTo("""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <title>Other theme title</title>
-                </head>
-                <body>
-                <p>other index</p>
-                </body>
-                </html>
-                """);
+            .expectBody()
+            .xpath("/html/head/title").isEqualTo("Other theme title")
+            .xpath("/html/body/p").isEqualTo("other index");
     }
 
     ThemeContext createDefaultContext() throws URISyntaxException {

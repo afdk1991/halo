@@ -1,5 +1,6 @@
 package run.halo.app.core.extension;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
 import static run.halo.app.core.extension.User.GROUP;
 import static run.halo.app.core.extension.User.KIND;
 import static run.halo.app.core.extension.User.VERSION;
@@ -32,25 +33,38 @@ public class User extends AbstractExtension {
     public static final String VERSION = "v1alpha1";
     public static final String KIND = "User";
 
+    public static final String USER_RELATED_ROLES_INDEX = "roles";
+
     public static final String ROLE_NAMES_ANNO = "rbac.authorization.halo.run/role-names";
+
+    public static final String EMAIL_TO_VERIFY = "halo.run/email-to-verify";
+
+    public static final String LAST_AVATAR_ATTACHMENT_NAME_ANNO =
+        "halo.run/last-avatar-attachment-name";
+
+    public static final String AVATAR_ATTACHMENT_NAME_ANNO = "halo.run/avatar-attachment-name";
 
     public static final String HIDDEN_USER_LABEL = "halo.run/hidden-user";
 
-    @Schema(required = true)
-    private UserSpec spec;
+    public static final String REQUEST_TO_UPDATE = "halo.run/request-to-update";
 
-    private UserStatus status;
+    @Schema(requiredMode = REQUIRED)
+    private UserSpec spec = new UserSpec();
+
+    private UserStatus status = new UserStatus();
 
     @Data
     public static class UserSpec {
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private String displayName;
 
         private String avatar;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private String email;
+
+        private boolean emailVerified;
 
         private String phone;
 
@@ -61,6 +75,8 @@ public class User extends AbstractExtension {
         private Instant registeredAt;
 
         private Boolean twoFactorAuthEnabled;
+
+        private String totpEncryptedSecret;
 
         private Boolean disabled;
 
@@ -82,16 +98,16 @@ public class User extends AbstractExtension {
     @Data
     public static class LoginHistory {
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private Instant loginAt;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private String sourceIp;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private String userAgent;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private Boolean successful;
 
         private String reason;

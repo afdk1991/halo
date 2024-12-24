@@ -1,12 +1,14 @@
 package run.halo.app.theme.router.factories;
 
+import static org.apache.commons.lang3.ObjectUtils.defaultIfNull;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
 import static org.springframework.web.reactive.function.server.RequestPredicates.accept;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
@@ -14,7 +16,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
@@ -26,20 +30,22 @@ import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import org.springframework.web.server.i18n.LocaleContextResolver;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import run.halo.app.core.extension.content.Post;
-import run.halo.app.extension.GVK;
-import run.halo.app.extension.GroupVersionKind;
 import run.halo.app.extension.MetadataUtil;
 import run.halo.app.extension.ReactiveExtensionClient;
+import run.halo.app.extension.index.query.QueryFactory;
 import run.halo.app.infra.exception.NotFoundException;
 import run.halo.app.infra.utils.JsonUtils;
 import run.halo.app.theme.DefaultTemplateEnum;
+import run.halo.app.theme.ViewNameResolver;
 import run.halo.app.theme.finders.PostFinder;
-import run.halo.app.theme.finders.impl.PostFinderImpl;
 import run.halo.app.theme.finders.vo.PostVo;
-import run.halo.app.theme.router.ViewNameResolver;
+import run.halo.app.theme.router.ModelMapUtils;
+import run.halo.app.theme.router.ReactiveQueryPostPredicateResolver;
+import run.halo.app.theme.router.TitleVisibilityIdentifyCalculator;
 
 /**
  * The {@link PostRouteFactory} for generate {@link RouterFunction} specific to the template
@@ -58,6 +64,12 @@ public class PostRouteFactory implements RouteFactory {
 
     private final ReactiveExtensionClient client;
 
+    private final ReactiveQueryPostPredicateResolver queryPostPredicateResolver;
+
+    private final TitleVisibilityIdentifyCalculator titleVisibilityIdentifyCalculator;
+
+    private final LocaleContextResolver localeContextResolver;
+
     @Override
     public RouterFunction<ServerResponse> create(String pattern) {
         PatternParser postParamPredicate =
@@ -75,7 +87,7 @@ public class PostRouteFactory implements RouteFactory {
         return request -> {
             Map<String, String> variables = mergedVariables(request);
             PostPatternVariable patternVariable = new PostPatternVariable();
-            Optional.ofNullable(variables.get(paramPredicate.getQueryParamName()))
+            Optional.ofNullable(variables.get(paramPredicate.getParamName()))
                 .ifPresent(value -> {
                     switch (paramPredicate.getPlaceholderName()) {
                         case "name" -> patternVariable.setName(value);
@@ -100,20 +112,33 @@ public class PostRouteFactory implements RouteFactory {
         PostPatternVariable patternVariable) {
         Mono<PostVo> postVoMono = bestMatchPost(patternVariable);
         return postVoMono
+            .doOnNext(postVo -> {
+                postVo.getSpec().setTitle(
+                    titleVisibilityIdentifyCalculator.calculateTitle(
+                        postVo.getSpec().getTitle(),
+                        postVo.getSpec().getVisible(),
+                        localeContextResolver.resolveLocaleContext(request.exchange())
+                            .getLocale())
+                );
+            })
             .flatMap(postVo -> {
-                Map<String, Object> model = new HashMap<>();
-                model.put("name", postVo.getMetadata().getName());
-                model.put(ModelConst.TEMPLATE_ID, DefaultTemplateEnum.POST.getValue());
-                model.put("groupVersionKind", GroupVersionKind.fromExtension(Post.class));
-                GVK gvk = Post.class.getAnnotation(GVK.class);
-                model.put("plural", gvk.plural());
-                model.put("post", postVo);
-
-                String template = postVo.getSpec().getTemplate();
-                return viewNameResolver.resolveViewNameOrDefault(request, template,
-                        DefaultTemplateEnum.POST.getValue())
+                Map<String, Object> model = ModelMapUtils.postModel(postVo);
+                return determineTemplate(request, postVo)
                     .flatMap(templateName -> ServerResponse.ok().render(templateName, model));
             });
+    }
+
+    Mono<String> determineTemplate(ServerRequest request, PostVo postVo) {
+        return Flux.fromIterable(defaultIfNull(postVo.getCategories(), List.of()))
+            .filter(category -> isNotBlank(category.getSpec().getPostTemplate()))
+            .concatMap(category -> viewNameResolver.resolveViewNameOrDefault(request,
+                category.getSpec().getPostTemplate(), null)
+            )
+            .next()
+            .switchIfEmpty(Mono.defer(() -> viewNameResolver.resolveViewNameOrDefault(request,
+                postVo.getSpec().getTemplate(),
+                DefaultTemplateEnum.POST.getValue())
+            ));
     }
 
     Mono<PostVo> bestMatchPost(PostPatternVariable variable) {
@@ -132,26 +157,32 @@ public class PostRouteFactory implements RouteFactory {
     }
 
     Flux<Post> postsByPredicates(PostPatternVariable patternVariable) {
-        if (StringUtils.isNotBlank(patternVariable.getName())) {
+        if (isNotBlank(patternVariable.getName())) {
             return fetchPostsByName(patternVariable.getName());
         }
-        if (StringUtils.isNotBlank(patternVariable.getSlug())) {
+        if (isNotBlank(patternVariable.getSlug())) {
             return fetchPostsBySlug(patternVariable.getSlug());
         }
         return Flux.empty();
     }
 
     private Flux<Post> fetchPostsByName(String name) {
-        return client.fetch(Post.class, name)
-            .filter(PostFinderImpl.FIXED_PREDICATE)
+        return queryPostPredicateResolver.getPredicate()
+            .flatMap(predicate -> client.fetch(Post.class, name)
+                .filter(predicate)
+            )
             .flux();
     }
 
     private Flux<Post> fetchPostsBySlug(String slug) {
-        return client.list(Post.class,
-            post -> PostFinderImpl.FIXED_PREDICATE.test(post)
-                && matchIfPresent(slug, post.getSpec().getSlug()),
-            null);
+        return queryPostPredicateResolver.getListOptions()
+            .flatMapMany(listOptions -> {
+                if (isNotBlank(slug)) {
+                    var other = QueryFactory.equal("spec.slug", slug);
+                    listOptions.setFieldSelector(listOptions.getFieldSelector().andQuery(other));
+                }
+                return client.listAll(Post.class, listOptions, Sort.unsorted());
+            });
     }
 
     private boolean matchIfPresent(String variable, String target) {
@@ -184,6 +215,7 @@ public class PostRouteFactory implements RouteFactory {
         return mergedVariables;
     }
 
+    @Getter
     static class PatternParser {
         private static final Pattern PATTERN_COMPILE = Pattern.compile("([^&?]*)=\\{(.*?)\\}(&|$)");
         private static final Cache<String, Matcher> MATCHER_CACHE = CacheBuilder.newBuilder()
@@ -221,18 +253,6 @@ public class PostRouteFactory implements RouteFactory {
             }
 
             return RequestPredicates.queryParam(paramName, value -> true);
-        }
-
-        public String getPlaceholderName() {
-            return this.placeholderName;
-        }
-
-        public String getQueryParamName() {
-            return this.paramName;
-        }
-
-        public boolean isQueryParamPattern() {
-            return isQueryParamPattern;
         }
     }
 }

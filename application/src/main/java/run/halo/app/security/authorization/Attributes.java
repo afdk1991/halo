@@ -1,7 +1,5 @@
 package run.halo.app.security.authorization;
 
-import org.springframework.security.core.userdetails.UserDetails;
-
 /**
  * Attributes is used by an Authorizer to get information about a request
  * that is used to make an authorization decision.
@@ -10,10 +8,6 @@ import org.springframework.security.core.userdetails.UserDetails;
  * @since 2.0.0
  */
 public interface Attributes {
-    /**
-     * @return the UserDetails object to authorize
-     */
-    UserDetails getUser();
 
     /**
      * @return the verb associated with API requests(this includes get, list,
@@ -67,4 +61,6 @@ public interface Attributes {
     String getPath();
 
     String getSubName();
+
+    String getUserSpace();
 }

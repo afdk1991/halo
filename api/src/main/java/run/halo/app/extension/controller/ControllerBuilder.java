@@ -2,13 +2,13 @@ package run.halo.app.extension.controller;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.function.BiPredicate;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 import org.springframework.util.Assert;
 import run.halo.app.extension.Extension;
 import run.halo.app.extension.ExtensionClient;
-import run.halo.app.extension.WatcherPredicates;
+import run.halo.app.extension.ExtensionMatcher;
+import run.halo.app.extension.ListOptions;
+import run.halo.app.extension.WatcherExtensionMatchers;
 import run.halo.app.extension.controller.Reconciler.Request;
 
 public class ControllerBuilder {
@@ -19,17 +19,19 @@ public class ControllerBuilder {
 
     private Duration maxDelay;
 
-    private Reconciler<Request> reconciler;
+    private final Reconciler<Request> reconciler;
 
     private Supplier<Instant> nowSupplier;
 
     private Extension extension;
 
-    private Predicate<Extension> onAddPredicate;
+    private ExtensionMatcher onAddMatcher;
 
-    private Predicate<Extension> onDeletePredicate;
+    private ExtensionMatcher onDeleteMatcher;
 
-    private BiPredicate<Extension, Extension> onUpdatePredicate;
+    private ExtensionMatcher onUpdateMatcher;
+
+    private ListOptions syncAllListOptions;
 
     private final ExtensionClient client;
 
@@ -65,24 +67,28 @@ public class ControllerBuilder {
         return this;
     }
 
-    public ControllerBuilder onAddPredicate(Predicate<Extension> onAddPredicate) {
-        this.onAddPredicate = onAddPredicate;
+    public ControllerBuilder onAddMatcher(ExtensionMatcher onAddMatcher) {
+        this.onAddMatcher = onAddMatcher;
         return this;
     }
 
-    public ControllerBuilder onDeletePredicate(Predicate<Extension> onDeletePredicate) {
-        this.onDeletePredicate = onDeletePredicate;
+    public ControllerBuilder onDeleteMatcher(ExtensionMatcher onDeleteMatcher) {
+        this.onDeleteMatcher = onDeleteMatcher;
         return this;
     }
 
-    public ControllerBuilder onUpdatePredicate(
-        BiPredicate<Extension, Extension> onUpdatePredicate) {
-        this.onUpdatePredicate = onUpdatePredicate;
+    public ControllerBuilder onUpdateMatcher(ExtensionMatcher extensionMatcher) {
+        this.onUpdateMatcher = extensionMatcher;
         return this;
     }
 
     public ControllerBuilder syncAllOnStart(boolean syncAllAtStart) {
         this.syncAllOnStart = syncAllAtStart;
+        return this;
+    }
+
+    public ControllerBuilder syncAllListOptions(ListOptions syncAllListOptions) {
+        this.syncAllListOptions = syncAllListOptions;
         return this;
     }
 
@@ -107,19 +113,34 @@ public class ControllerBuilder {
         Assert.notNull(reconciler, "Reconciler must not be null");
 
         var queue = new DefaultQueue<Request>(nowSupplier, minDelay);
-        var predicates = new WatcherPredicates.Builder()
-            .withGroupVersionKind(extension.groupVersionKind())
-            .onAddPredicate(onAddPredicate)
-            .onUpdatePredicate(onUpdatePredicate)
-            .onDeletePredicate(onDeletePredicate)
+        var extensionMatchers = WatcherExtensionMatchers.builder(client,
+                extension.groupVersionKind())
+            .onAddMatcher(onAddMatcher)
+            .onUpdateMatcher(onUpdateMatcher)
+            .onDeleteMatcher(onDeleteMatcher)
             .build();
-        var watcher = new ExtensionWatcher(queue, predicates);
+        var watcher = new ExtensionWatcher(queue, extensionMatchers);
         var synchronizer = new RequestSynchronizer(syncAllOnStart,
             client,
             extension,
             watcher,
-            predicates.onAddPredicate());
+            determineSyncAllListOptions());
         return new DefaultController<>(name, reconciler, queue, synchronizer, minDelay, maxDelay,
             workerCount);
+    }
+
+    ListOptions determineSyncAllListOptions() {
+        if (syncAllListOptions != null) {
+            return syncAllListOptions;
+        }
+        // In order to be compatible with the previous version of the code
+        // The previous version of the code determined syncAllListOptions through onAddMatcher
+        // TODO Will be removed later
+        if (onAddMatcher != null) {
+            return new ListOptions()
+                .setLabelSelector(onAddMatcher.getLabelSelector())
+                .setFieldSelector(onAddMatcher.getFieldSelector());
+        }
+        return new ListOptions();
     }
 }

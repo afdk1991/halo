@@ -1,44 +1,51 @@
 package run.halo.app.theme.finders.impl;
 
-import java.time.Instant;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
+import static run.halo.app.extension.index.query.QueryFactory.and;
+import static run.halo.app.extension.index.query.QueryFactory.equal;
+import static run.halo.app.extension.index.query.QueryFactory.in;
+import static run.halo.app.extension.index.query.QueryFactory.notEqual;
+
 import java.util.Comparator;
-import java.util.Deque;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.function.Function;
-import java.util.function.Predicate;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import lombok.AllArgsConstructor;
+import lombok.Data;
+import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.tuple.Pair;
+import org.springframework.data.domain.Sort;
 import org.springframework.lang.NonNull;
-import org.springframework.util.CollectionUtils;
-import org.springframework.util.comparator.Comparators;
+import org.springframework.util.Assert;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import run.halo.app.content.PostService;
+import run.halo.app.content.CategoryService;
+import run.halo.app.core.extension.content.Category;
 import run.halo.app.core.extension.content.Post;
+import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.ListResult;
+import run.halo.app.extension.PageRequest;
+import run.halo.app.extension.PageRequestImpl;
 import run.halo.app.extension.ReactiveExtensionClient;
+import run.halo.app.extension.exception.ExtensionNotFoundException;
+import run.halo.app.extension.index.query.Query;
+import run.halo.app.extension.index.query.QueryFactory;
+import run.halo.app.extension.router.selector.FieldSelector;
+import run.halo.app.extension.router.selector.LabelSelector;
 import run.halo.app.infra.utils.HaloUtils;
-import run.halo.app.metrics.CounterService;
-import run.halo.app.metrics.MeterUtils;
-import run.halo.app.theme.finders.CategoryFinder;
-import run.halo.app.theme.finders.ContributorFinder;
+import run.halo.app.infra.utils.JsonUtils;
+import run.halo.app.infra.utils.SortUtils;
 import run.halo.app.theme.finders.Finder;
 import run.halo.app.theme.finders.PostFinder;
-import run.halo.app.theme.finders.TagFinder;
+import run.halo.app.theme.finders.PostPublicQueryService;
 import run.halo.app.theme.finders.vo.ContentVo;
 import run.halo.app.theme.finders.vo.ListedPostVo;
 import run.halo.app.theme.finders.vo.NavigationPostVo;
 import run.halo.app.theme.finders.vo.PostArchiveVo;
 import run.halo.app.theme.finders.vo.PostArchiveYearMonthVo;
 import run.halo.app.theme.finders.vo.PostVo;
-import run.halo.app.theme.finders.vo.StatsVo;
+import run.halo.app.theme.router.ReactiveQueryPostPredicateResolver;
 
 /**
  * A finder for {@link Post}.
@@ -50,165 +57,174 @@ import run.halo.app.theme.finders.vo.StatsVo;
 @AllArgsConstructor
 public class PostFinderImpl implements PostFinder {
 
-    public static final Predicate<Post> FIXED_PREDICATE = post -> post.isPublished()
-        && Objects.equals(false, post.getSpec().getDeleted())
-        && Post.VisibleEnum.PUBLIC.equals(post.getSpec().getVisible());
     private final ReactiveExtensionClient client;
 
-    private final PostService postService;
+    private final PostPublicQueryService postPublicQueryService;
 
-    private final TagFinder tagFinder;
+    private final ReactiveQueryPostPredicateResolver postPredicateResolver;
 
-    private final CategoryFinder categoryFinder;
-
-    private final ContributorFinder contributorFinder;
-
-    private final CounterService counterService;
+    private final CategoryService categoryService;
 
     @Override
     public Mono<PostVo> getByName(String postName) {
-        return client.fetch(Post.class, postName)
-            .flatMap(this::getListedPostVo)
-            .map(PostVo::from)
-            .flatMap(postVo -> content(postName)
-                .doOnNext(postVo::setContent)
-                .thenReturn(postVo)
+        return postPredicateResolver.getPredicate()
+            .flatMap(predicate -> client.get(Post.class, postName)
+                .filter(predicate)
+                .flatMap(post -> postPublicQueryService.convertToVo(post,
+                    post.getSpec().getReleaseSnapshot())
+                )
             );
     }
 
     @Override
     public Mono<ContentVo> content(String postName) {
-        return postService.getReleaseContent(postName)
-            .map(wrapper -> ContentVo.builder().content(wrapper.getContent())
-                .raw(wrapper.getRaw()).build());
+        return postPublicQueryService.getContent(postName);
+    }
+
+    static Sort defaultSort() {
+        return Sort.by(Sort.Order.desc("spec.pinned"),
+            Sort.Order.desc("spec.priority"),
+            Sort.Order.desc("spec.publishTime"),
+            Sort.Order.asc("metadata.name")
+        );
+    }
+
+    @NonNull
+    static LinkNavigation findPostNavigation(List<String> postNames, String target) {
+        Assert.notNull(target, "Target post name must not be null");
+        for (int i = 0; i < postNames.size(); i++) {
+            var item = postNames.get(i);
+            if (target.equals(item)) {
+                var prevLink = (i > 0) ? postNames.get(i - 1) : null;
+                var nextLink = (i < postNames.size() - 1) ? postNames.get(i + 1) : null;
+                return new LinkNavigation(prevLink, target, nextLink);
+            }
+        }
+        return new LinkNavigation(null, target, null);
+    }
+
+    static Sort archiveSort() {
+        return Sort.by(Sort.Order.desc("spec.publishTime"),
+            Sort.Order.desc("metadata.name")
+        );
+    }
+
+    private Mono<PostVo> fetchByName(String name) {
+        if (StringUtils.isBlank(name)) {
+            return Mono.empty();
+        }
+        return getByName(name)
+            .onErrorResume(ExtensionNotFoundException.class::isInstance, (error) -> Mono.empty());
     }
 
     @Override
     public Mono<NavigationPostVo> cursor(String currentName) {
-        // TODO Optimize the post names query here
-        return client.list(Post.class, FIXED_PREDICATE, defaultComparator())
-            .map(post -> post.getMetadata().getName())
-            .collectList()
-            .flatMap(postNames -> Mono.just(NavigationPostVo.builder())
-                .flatMap(builder -> getByName(currentName)
-                    .doOnNext(builder::current)
-                    .thenReturn(builder)
-                )
-                .flatMap(builder -> {
-                    Pair<String, String> previousNextPair =
-                        postPreviousNextPair(postNames, currentName);
-                    String previousPostName = previousNextPair.getLeft();
-                    String nextPostName = previousNextPair.getRight();
-                    return getByName(previousPostName)
-                        .doOnNext(builder::previous)
-                        .then(getByName(nextPostName))
-                        .doOnNext(builder::next)
-                        .thenReturn(builder);
-                })
-                .map(NavigationPostVo.NavigationPostVoBuilder::build))
+        return postPredicateResolver.getListOptions()
+            .map(listOptions -> ListOptions.builder(listOptions)
+                // Exclude hidden posts
+                .andQuery(notHiddenPostQuery())
+                .build()
+            )
+            .flatMap(postListOption -> {
+                var postNames = client.indexedQueryEngine()
+                    .retrieve(Post.GVK, postListOption,
+                        PageRequestImpl.ofSize(0).withSort(defaultSort())
+                    )
+                    .getItems();
+                var previousNextPair = findPostNavigation(postNames, currentName);
+                String previousPostName = previousNextPair.prev();
+                String nextPostName = previousNextPair.next();
+                var builder = NavigationPostVo.builder();
+                var currentMono = getByName(currentName)
+                    .doOnNext(builder::current);
+                var prevMono = fetchByName(previousPostName)
+                    .doOnNext(builder::previous);
+                var nextMono = fetchByName(nextPostName)
+                    .doOnNext(builder::next);
+                return Mono.when(currentMono, prevMono, nextMono)
+                    .then(Mono.fromSupplier(builder::build));
+            })
             .defaultIfEmpty(NavigationPostVo.empty());
     }
 
+    private static Query notHiddenPostQuery() {
+        return notEqual("status.hideFromList", BooleanUtils.TRUE);
+    }
+
     @Override
-    public Flux<ListedPostVo> listAll() {
-        return client.list(Post.class, FIXED_PREDICATE, defaultComparator())
-            .concatMap(this::getListedPostVo);
-    }
-
-    static Pair<String, String> postPreviousNextPair(List<String> postNames,
-        String currentName) {
-        FixedSizeSlidingWindow<String> window = new FixedSizeSlidingWindow<>(3);
-        for (String postName : postNames) {
-            window.add(postName);
-            if (!window.isFull()) {
-                continue;
-            }
-            int index = window.indexOf(currentName);
-            if (index == -1) {
-                continue;
-            }
-            // got expected window
-            if (index < 2) {
-                break;
-            }
+    public Mono<ListResult<ListedPostVo>> list(Map<String, Object> params) {
+        var query = Optional.ofNullable(params)
+            .map(map -> JsonUtils.mapToObject(map, PostQuery.class))
+            .orElseGet(PostQuery::new);
+        if (StringUtils.isNotBlank(query.getCategoryName())) {
+            return listChildrenCategories(query.getCategoryName())
+                .map(category -> category.getMetadata().getName())
+                .collectList()
+                .map(categoryNames -> ListOptions.builder(query.toListOptions())
+                    .andQuery(in("spec.categories", categoryNames))
+                    .build()
+                )
+                .flatMap(
+                    listOptions -> postPublicQueryService.list(listOptions, query.toPageRequest()));
         }
-
-        List<String> elements = window.elements();
-        // current post index
-        int index = elements.indexOf(currentName);
-
-        String previousPostName = null;
-        if (index != 0) {
-            previousPostName = elements.get(index - 1);
-        }
-
-        String nextPostName = null;
-        if (elements.size() - 1 > index) {
-            nextPostName = elements.get(index + 1);
-        }
-        return Pair.of(previousPostName, nextPostName);
-    }
-
-    static class FixedSizeSlidingWindow<T> {
-        Deque<T> queue;
-        int size;
-
-        public FixedSizeSlidingWindow(int size) {
-            this.size = size;
-            // FIFO
-            queue = new ArrayDeque<>(size);
-        }
-
-        /**
-         * Add element to the window.
-         * The element added first will be deleted when the element in the collection exceeds
-         * {@code size}.
-         */
-        public void add(T t) {
-            if (queue.size() == size) {
-                // remove first
-                queue.poll();
-            }
-            // add to last
-            queue.add(t);
-        }
-
-        public int indexOf(T o) {
-            List<T> elements = elements();
-            return elements.indexOf(o);
-        }
-
-        public List<T> elements() {
-            return new ArrayList<>(queue);
-        }
-
-        public boolean isFull() {
-            return queue.size() == size;
-        }
+        return postPublicQueryService.list(query.toListOptions(), query.toPageRequest());
     }
 
     @Override
     public Mono<ListResult<ListedPostVo>> list(Integer page, Integer size) {
-        return listPost(page, size, null, defaultComparator());
+        var listOptions = ListOptions.builder()
+            .fieldQuery(notHiddenPostQuery())
+            .build();
+        return postPublicQueryService.list(listOptions, getPageRequest(page, size));
+    }
+
+    private PageRequestImpl getPageRequest(Integer page, Integer size) {
+        return PageRequestImpl.of(pageNullSafe(page), sizeNullSafe(size), defaultSort());
     }
 
     @Override
     public Mono<ListResult<ListedPostVo>> listByCategory(Integer page, Integer size,
         String categoryName) {
-        return listPost(page, size,
-            post -> contains(post.getSpec().getCategories(), categoryName), defaultComparator());
+        return listChildrenCategories(categoryName)
+            .map(category -> category.getMetadata().getName())
+            .collectList()
+            .flatMap(categoryNames -> {
+                var listOptions = new ListOptions();
+                var fieldQuery = in("spec.categories", categoryNames);
+                listOptions.setFieldSelector(FieldSelector.of(fieldQuery));
+                return postPublicQueryService.list(listOptions, getPageRequest(page, size));
+            });
+    }
+
+    private Flux<Category> listChildrenCategories(String categoryName) {
+        if (StringUtils.isBlank(categoryName)) {
+            return client.listAll(Category.class, new ListOptions(),
+                Sort.by(Sort.Order.asc("metadata.creationTimestamp"),
+                    Sort.Order.desc("metadata.name")));
+        }
+        return categoryService.listChildren(categoryName);
     }
 
     @Override
     public Mono<ListResult<ListedPostVo>> listByTag(Integer page, Integer size, String tag) {
-        return listPost(page, size,
-            post -> contains(post.getSpec().getTags(), tag), defaultComparator());
+        var fieldQuery = QueryFactory.all();
+        if (StringUtils.isNotBlank(tag)) {
+            fieldQuery = and(fieldQuery, equal("spec.tags", tag));
+        }
+        var listOptions = new ListOptions();
+        listOptions.setFieldSelector(FieldSelector.of(fieldQuery));
+        return postPublicQueryService.list(listOptions, getPageRequest(page, size));
     }
 
     @Override
     public Mono<ListResult<ListedPostVo>> listByOwner(Integer page, Integer size, String owner) {
-        return listPost(page, size,
-            post -> post.getSpec().getOwner().equals(owner), defaultComparator());
+        var fieldQuery = QueryFactory.all();
+        if (StringUtils.isNotBlank(owner)) {
+            fieldQuery = and(fieldQuery, equal("spec.owner", owner));
+        }
+        var listOptions = new ListOptions();
+        listOptions.setFieldSelector(FieldSelector.of(fieldQuery));
+        return postPublicQueryService.list(listOptions, getPageRequest(page, size));
     }
 
     @Override
@@ -224,23 +240,24 @@ public class PostFinderImpl implements PostFinder {
     @Override
     public Mono<ListResult<PostArchiveVo>> archives(Integer page, Integer size, String year,
         String month) {
-        return listPost(page, size, post -> {
-            Map<String, String> labels = post.getMetadata().getLabels();
-            if (labels == null) {
-                return false;
-            }
-            boolean yearMatch = StringUtils.isBlank(year)
-                || year.equals(labels.get(Post.ARCHIVE_YEAR_LABEL));
-            boolean monthMatch = StringUtils.isBlank(month)
-                || month.equals(labels.get(Post.ARCHIVE_MONTH_LABEL));
-            return yearMatch && monthMatch;
-        }, archiveComparator())
+        var listOptions = new ListOptions();
+        listOptions.setFieldSelector(FieldSelector.of(notHiddenPostQuery()));
+        var labelSelectorBuilder = LabelSelector.builder();
+        if (StringUtils.isNotBlank(year)) {
+            labelSelectorBuilder.eq(Post.ARCHIVE_YEAR_LABEL, year);
+        }
+        if (StringUtils.isNotBlank(month)) {
+            labelSelectorBuilder.eq(Post.ARCHIVE_MONTH_LABEL, month);
+        }
+        listOptions.setLabelSelector(labelSelectorBuilder.build());
+        var pageRequest = PageRequestImpl.of(pageNullSafe(page), sizeNullSafe(size), archiveSort());
+        return postPublicQueryService.list(listOptions, pageRequest)
             .map(list -> {
                 Map<String, List<ListedPostVo>> yearPosts = list.get()
                     .collect(Collectors.groupingBy(
                         post -> HaloUtils.getYearText(post.getSpec().getPublishTime())));
-                List<PostArchiveVo> postArchives =
-                    yearPosts.entrySet().stream().map(entry -> {
+                List<PostArchiveVo> postArchives = yearPosts.entrySet().stream()
+                    .map(entry -> {
                         String key = entry.getKey();
                         // archives by month
                         Map<String, List<ListedPostVo>> monthPosts = entry.getValue().stream()
@@ -267,123 +284,61 @@ public class PostFinderImpl implements PostFinder {
                 return new ListResult<>(list.getPage(), list.getSize(), list.getTotal(),
                     postArchives);
             })
-            .defaultIfEmpty(new ListResult<>(page, size, 0, List.of()));
+            .defaultIfEmpty(ListResult.emptyResult());
     }
 
-    private boolean contains(List<String> c, String key) {
-        if (StringUtils.isBlank(key) || c == null) {
-            return false;
-        }
-        return c.contains(key);
+    @Override
+    public Flux<ListedPostVo> listAll() {
+        return postPredicateResolver.getListOptions()
+            .flatMapMany(listOptions -> client.listAll(Post.class, listOptions, defaultSort()))
+            .flatMapSequential(postPublicQueryService::convertToListedVo);
     }
 
-    private Mono<ListResult<ListedPostVo>> listPost(Integer page, Integer size,
-        Predicate<Post> postPredicate,
-        Comparator<Post> comparator) {
-        Predicate<Post> predicate = FIXED_PREDICATE
-            .and(postPredicate == null ? post -> true : postPredicate);
-        return client.list(Post.class, predicate,
-                comparator, pageNullSafe(page), sizeNullSafe(size))
-            .flatMap(list -> Flux.fromStream(list.get())
-                .concatMap(post -> getListedPostVo(post)
-                    .flatMap(postVo -> populateStats(postVo)
-                        .doOnNext(postVo::setStats).thenReturn(postVo)
-                    )
-                )
-                .collectList()
-                .map(postVos -> new ListResult<>(list.getPage(), list.getSize(), list.getTotal(),
-                    postVos)
-                )
-            )
-            .defaultIfEmpty(new ListResult<>(page, size, 0L, List.of()));
-    }
-
-    private <T extends ListedPostVo> Mono<StatsVo> populateStats(T postVo) {
-        return counterService.getByName(MeterUtils.nameOf(Post.class, postVo.getMetadata()
-                .getName()))
-            .map(counter -> StatsVo.builder()
-                .visit(counter.getVisit())
-                .upvote(counter.getUpvote())
-                .comment(counter.getApprovedComment())
-                .build()
-            )
-            .defaultIfEmpty(StatsVo.empty());
-    }
-
-    private Mono<ListedPostVo> getListedPostVo(@NonNull Post post) {
-        ListedPostVo postVo = ListedPostVo.from(post);
-        postVo.setCategories(List.of());
-        postVo.setTags(List.of());
-        postVo.setContributors(List.of());
-
-        return Mono.just(postVo)
-            .flatMap(lp -> populateStats(postVo)
-                .doOnNext(lp::setStats)
-                .thenReturn(lp)
-            )
-            .flatMap(p -> {
-                String owner = p.getSpec().getOwner();
-                return contributorFinder.getContributor(owner)
-                    .doOnNext(p::setOwner)
-                    .thenReturn(p);
-            })
-            .flatMap(p -> {
-                List<String> tagNames = p.getSpec().getTags();
-                if (CollectionUtils.isEmpty(tagNames)) {
-                    return Mono.just(p);
-                }
-                return tagFinder.getByNames(tagNames)
-                    .collectList()
-                    .doOnNext(p::setTags)
-                    .thenReturn(p);
-            })
-            .flatMap(p -> {
-                List<String> categoryNames = p.getSpec().getCategories();
-                if (CollectionUtils.isEmpty(categoryNames)) {
-                    return Mono.just(p);
-                }
-                return categoryFinder.getByNames(categoryNames)
-                    .collectList()
-                    .doOnNext(p::setCategories)
-                    .thenReturn(p);
-            })
-            .flatMap(p -> contributorFinder.getContributors(p.getStatus().getContributors())
-                .collectList()
-                .doOnNext(p::setContributors)
-                .thenReturn(p)
-            )
-            .defaultIfEmpty(postVo);
-    }
-
-    static Comparator<Post> defaultComparator() {
-        Function<Post, Boolean> pinned =
-            post -> Objects.requireNonNullElse(post.getSpec().getPinned(), false);
-        Function<Post, Integer> priority =
-            post -> Objects.requireNonNullElse(post.getSpec().getPriority(), 0);
-        Function<Post, Instant> publishTime =
-            post -> post.getSpec().getPublishTime();
-        Function<Post, String> name = post -> post.getMetadata().getName();
-        return Comparator.comparing(pinned)
-            .thenComparing(priority)
-            .thenComparing(publishTime, Comparators.nullsLow())
-            .thenComparing(name)
-            .reversed();
-    }
-
-    static Comparator<Post> archiveComparator() {
-        Function<Post, Instant> publishTime =
-            post -> post.getSpec().getPublishTime();
-        Function<Post, String> name = post -> post.getMetadata().getName();
-        return Comparator.comparing(publishTime, Comparators.nullsLow())
-            .thenComparing(name)
-            .reversed();
-    }
-
-    int pageNullSafe(Integer page) {
+    static int pageNullSafe(Integer page) {
         return ObjectUtils.defaultIfNull(page, 1);
     }
 
-    int sizeNullSafe(Integer size) {
+    static int sizeNullSafe(Integer size) {
         return ObjectUtils.defaultIfNull(size, 10);
+    }
+
+    record LinkNavigation(String prev, String current, String next) {
+    }
+
+    @Data
+    public static class PostQuery {
+        private Integer page;
+        private Integer size;
+        private String categoryName;
+        private String tagName;
+        private String owner;
+        private List<String> sort;
+
+        public ListOptions toListOptions() {
+            var builder = ListOptions.builder();
+            var hasQuery = false;
+            if (StringUtils.isNotBlank(owner)) {
+                builder.andQuery(equal("spec.owner", owner));
+                hasQuery = true;
+            }
+            if (StringUtils.isNotBlank(tagName)) {
+                builder.andQuery(equal("spec.tags", tagName));
+                hasQuery = true;
+            }
+            if (StringUtils.isNotBlank(categoryName)) {
+                builder.andQuery(in("spec.categories", categoryName));
+                hasQuery = true;
+            }
+            // Exclude hidden posts when no query
+            if (!hasQuery) {
+                builder.fieldQuery(notHiddenPostQuery());
+            }
+            return builder.build();
+        }
+
+        public PageRequest toPageRequest() {
+            return PageRequestImpl.of(pageNullSafe(getPage()),
+                sizeNullSafe(getSize()), SortUtils.resolve(sort).and(defaultSort()));
+        }
     }
 }

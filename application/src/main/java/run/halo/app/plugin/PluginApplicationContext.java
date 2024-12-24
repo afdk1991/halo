@@ -2,7 +2,11 @@ package run.halo.app.plugin;
 
 import java.util.List;
 import java.util.concurrent.locks.StampedLock;
-import org.springframework.context.support.GenericApplicationContext;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.context.ApplicationEvent;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.core.ResolvableType;
+import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.Assert;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -16,18 +20,23 @@ import run.halo.app.extension.GroupVersionKind;
  * @author guqing
  * @since 2.0.0
  */
-public class PluginApplicationContext extends GenericApplicationContext {
+public class PluginApplicationContext extends AnnotationConfigApplicationContext {
 
     private final GvkExtensionMapping gvkExtensionMapping = new GvkExtensionMapping();
 
-    private String pluginId;
+    private final String pluginId;
+
+    private final SpringPluginManager pluginManager;
+
+    public PluginApplicationContext(String pluginId, SpringPluginManager pluginManager,
+        DefaultListableBeanFactory beanFactory) {
+        super(beanFactory);
+        this.pluginId = pluginId;
+        this.pluginManager = pluginManager;
+    }
 
     public String getPluginId() {
         return pluginId;
-    }
-
-    public void setPluginId(String pluginId) {
-        this.pluginId = pluginId;
     }
 
     /**
@@ -103,6 +112,23 @@ public class PluginApplicationContext extends GenericApplicationContext {
         public void clear() {
             extensionNamesMapping.clear();
         }
+    }
+
+    @Override
+    protected void publishEvent(Object event, ResolvableType typeHint) {
+        if (event instanceof ApplicationEvent applicationEvent
+            && AnnotationUtils.findAnnotation(event.getClass(), SharedEvent.class) != null) {
+            // publish event via root context
+            var delegateEvent = new PluginSharedEventDelegator(this, applicationEvent);
+            pluginManager.getRootContext().publishEvent(delegateEvent);
+            return;
+        }
+        // unwrap event if needed
+        var originalEvent = event;
+        if (event instanceof HaloSharedEventDelegator delegator) {
+            originalEvent = delegator.getDelegate();
+        }
+        super.publishEvent(originalEvent, typeHint);
     }
 
     @Override

@@ -1,33 +1,32 @@
 package run.halo.app.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static run.halo.app.extension.GroupVersionKind.fromExtension;
+import static org.springframework.security.core.authority.AuthorityUtils.authorityListToSet;
 
-import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.core.AuthenticationException;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import run.halo.app.core.extension.Role;
-import run.halo.app.core.extension.RoleBinding.RoleRef;
-import run.halo.app.core.extension.RoleBinding.Subject;
-import run.halo.app.core.extension.service.RoleService;
-import run.halo.app.core.extension.service.UserService;
+import run.halo.app.core.user.service.RoleService;
+import run.halo.app.core.user.service.UserService;
 import run.halo.app.extension.Metadata;
-import run.halo.app.extension.exception.ExtensionNotFoundException;
+import run.halo.app.infra.exception.UserNotFoundException;
 
 @ExtendWith(MockitoExtension.class)
 class DefaultUserDetailServiceTest {
@@ -83,17 +82,8 @@ class DefaultUserDetailServiceTest {
     void shouldFindUserDetailsByExistingUsername() {
         var foundUser = createFakeUser();
 
-        var roleGvk = new Role().groupVersionKind();
-        var roleRef = new RoleRef();
-        roleRef.setKind(roleGvk.kind());
-        roleRef.setApiGroup(roleGvk.group());
-        roleRef.setName("fake-role");
-
-        var userGvk = foundUser.groupVersionKind();
-        var subject = new Subject(userGvk.kind(), "faker", userGvk.group());
-
         when(userService.getUser("faker")).thenReturn(Mono.just(foundUser));
-        when(roleService.listRoleRefs(subject)).thenReturn(Flux.just(roleRef));
+        when(roleService.getRolesByUsername("faker")).thenReturn(Flux.just("fake-role"));
 
         var userDetailsMono = userDetailService.findByUsername("faker");
 
@@ -102,39 +92,71 @@ class DefaultUserDetailServiceTest {
             .assertNext(gotUser -> {
                 assertEquals(foundUser.getMetadata().getName(), gotUser.getUsername());
                 assertEquals(foundUser.getSpec().getPassword(), gotUser.getPassword());
-                assertEquals(List.of("ROLE_fake-role"),
-                    gotUser.getAuthorities()
-                        .stream()
-                        .map(GrantedAuthority::getAuthority)
-                        .collect(Collectors.toList()));
+                assertEquals(
+                    Set.of("ROLE_fake-role", "ROLE_authenticated", "ROLE_anonymous"),
+                    authorityListToSet(gotUser.getAuthorities()));
             })
             .verifyComplete();
     }
 
     @Test
-    void shouldFindUserDetailsByExistingUsernameButKindOfRoleRefIsNotRole() {
-        var foundUser = createFakeUser();
+    void shouldFindHaloUserDetailsWith2faDisabledWhen2faNotEnabled() {
+        var fakeUser = createFakeUser();
+        when(userService.getUser("faker")).thenReturn(Mono.just(fakeUser));
+        when(roleService.getRolesByUsername("faker")).thenReturn(Flux.empty());
+        userDetailService.findByUsername("faker")
+            .as(StepVerifier::create)
+            .assertNext(userDetails -> {
+                assertInstanceOf(HaloUserDetails.class, userDetails);
+                assertFalse(((HaloUserDetails) userDetails).isTwoFactorAuthEnabled());
+            })
+            .verifyComplete();
+    }
 
-        var roleGvk = new Role().groupVersionKind();
-        var roleRef = new RoleRef();
-        roleRef.setKind("FakeRole");
-        roleRef.setApiGroup("fake.halo.run");
-        roleRef.setName("fake-role");
+    @Test
+    void shouldFindHaloUserDetailsWith2faDisabledWhen2faEnabledButNoTotpConfigured() {
+        var fakeUser = createFakeUser();
+        fakeUser.getSpec().setTwoFactorAuthEnabled(true);
+        when(userService.getUser("faker")).thenReturn(Mono.just(fakeUser));
+        when(roleService.getRolesByUsername("faker")).thenReturn(Flux.empty());
+        userDetailService.findByUsername("faker")
+            .as(StepVerifier::create)
+            .assertNext(userDetails -> {
+                assertInstanceOf(HaloUserDetails.class, userDetails);
+                assertFalse(((HaloUserDetails) userDetails).isTwoFactorAuthEnabled());
+            })
+            .verifyComplete();
+    }
 
-        var userGvk = foundUser.groupVersionKind();
-        var subject = new Subject(userGvk.kind(), "faker", userGvk.group());
+    @Test
+    void shouldFindHaloUserDetailsWith2faEnabledWhen2faEnabledAndTotpConfigured() {
+        var fakeUser = createFakeUser();
+        fakeUser.getSpec().setTwoFactorAuthEnabled(true);
+        fakeUser.getSpec().setTotpEncryptedSecret("fake-totp-encrypted-secret");
+        when(userService.getUser("faker")).thenReturn(Mono.just(fakeUser));
+        when(roleService.getRolesByUsername("faker")).thenReturn(Flux.empty());
+        userDetailService.findByUsername("faker")
+            .as(StepVerifier::create)
+            .assertNext(userDetails -> {
+                assertInstanceOf(HaloUserDetails.class, userDetails);
+                assertTrue(((HaloUserDetails) userDetails).isTwoFactorAuthEnabled());
+            })
+            .verifyComplete();
+    }
 
-        when(userService.getUser("faker")).thenReturn(Mono.just(foundUser));
-        when(roleService.listRoleRefs(subject)).thenReturn(Flux.just(roleRef));
-
-        var userDetailsMono = userDetailService.findByUsername("faker");
-
-        StepVerifier.create(userDetailsMono)
-            .expectSubscription()
-            .assertNext(gotUser -> {
-                assertEquals(foundUser.getMetadata().getName(), gotUser.getUsername());
-                assertEquals(foundUser.getSpec().getPassword(), gotUser.getPassword());
-                assertEquals(0, gotUser.getAuthorities().size());
+    @Test
+    void shouldFindHaloUserDetailsWith2faDisabledWhen2faDisabledGlobally() {
+        userDetailService.setTwoFactorAuthDisabled(true);
+        var fakeUser = createFakeUser();
+        fakeUser.getSpec().setTwoFactorAuthEnabled(true);
+        fakeUser.getSpec().setTotpEncryptedSecret("fake-totp-encrypted-secret");
+        when(userService.getUser("faker")).thenReturn(Mono.just(fakeUser));
+        when(roleService.getRolesByUsername("faker")).thenReturn(Flux.empty());
+        userDetailService.findByUsername("faker")
+            .as(StepVerifier::create)
+            .assertNext(userDetails -> {
+                assertInstanceOf(HaloUserDetails.class, userDetails);
+                assertFalse(((HaloUserDetails) userDetails).isTwoFactorAuthEnabled());
             })
             .verifyComplete();
     }
@@ -143,20 +165,17 @@ class DefaultUserDetailServiceTest {
     void shouldFindUserDetailsByExistingUsernameButWithoutAnyRoles() {
         var foundUser = createFakeUser();
 
-        var userGvk = foundUser.groupVersionKind();
-        var subject = new Subject(userGvk.kind(), "faker", userGvk.group());
-
         when(userService.getUser("faker")).thenReturn(Mono.just(foundUser));
-        when(roleService.listRoleRefs(subject)).thenReturn(Flux.empty());
+        when(roleService.getRolesByUsername("faker")).thenReturn(Flux.empty());
 
-        var userDetailsMono = userDetailService.findByUsername("faker");
-
-        StepVerifier.create(userDetailsMono)
+        StepVerifier.create(userDetailService.findByUsername("faker"))
             .expectSubscription()
             .assertNext(gotUser -> {
                 assertEquals(foundUser.getMetadata().getName(), gotUser.getUsername());
                 assertEquals(foundUser.getSpec().getPassword(), gotUser.getPassword());
-                assertEquals(0, gotUser.getAuthorities().size());
+                assertEquals(
+                    Set.of("ROLE_anonymous", "ROLE_authenticated"),
+                    authorityListToSet(gotUser.getAuthorities()));
             })
             .verifyComplete();
     }
@@ -164,14 +183,20 @@ class DefaultUserDetailServiceTest {
     @Test
     void shouldNotFindUserDetailsByNonExistingUsername() {
         when(userService.getUser("non-existing-user")).thenReturn(
-            Mono.error(() -> new ExtensionNotFoundException(
-                fromExtension(run.halo.app.core.extension.User.class), "non-existing-user")));
+            Mono.error(() -> new UserNotFoundException("non-existing-user")));
 
         var userDetailsMono = userDetailService.findByUsername("non-existing-user");
 
         StepVerifier.create(userDetailsMono)
             .expectError(AuthenticationException.class)
             .verify();
+    }
+
+    Role createRole(String roleName) {
+        var role = new Role();
+        role.setMetadata(new Metadata());
+        role.getMetadata().setName(roleName);
+        return role;
     }
 
     UserDetails createFakeUserDetails() {

@@ -1,23 +1,14 @@
 package run.halo.app.security.authorization;
 
-import org.springframework.security.core.userdetails.UserDetails;
-
 /**
  * @author guqing
  * @since 2.0.0
  */
 public class AttributesRecord implements Attributes {
     private final RequestInfo requestInfo;
-    private final UserDetails user;
 
-    public AttributesRecord(UserDetails user, RequestInfo requestInfo) {
+    public AttributesRecord(RequestInfo requestInfo) {
         this.requestInfo = requestInfo;
-        this.user = user;
-    }
-
-    @Override
-    public UserDetails getUser() {
-        return this.user;
     }
 
     @Override
@@ -71,5 +62,10 @@ public class AttributesRecord implements Attributes {
     @Override
     public String getSubName() {
         return requestInfo.getSubName();
+    }
+
+    @Override
+    public String getUserSpace() {
+        return requestInfo.getUserspace();
     }
 }

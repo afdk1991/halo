@@ -1,5 +1,7 @@
 package run.halo.app.search.extension;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -8,14 +10,20 @@ import run.halo.app.extension.AbstractExtension;
 import run.halo.app.extension.GVK;
 import run.halo.app.extension.Ref;
 
+/**
+ * Search engine extension.
+ *
+ * @deprecated This class is deprecated and will be removed in Halo 2.18.
+ */
 @Data
 @ToString(callSuper = true)
 @EqualsAndHashCode(callSuper = true)
 @GVK(group = "plugin.halo.run", version = "v1alpha1", kind = "SearchEngine",
     plural = "searchengines", singular = "searchengine")
+@Deprecated(forRemoval = true)
 public class SearchEngine extends AbstractExtension {
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private SearchEngineSpec spec;
 
     @Data
@@ -25,7 +33,7 @@ public class SearchEngine extends AbstractExtension {
 
         private String website;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private String displayName;
 
         private String description;

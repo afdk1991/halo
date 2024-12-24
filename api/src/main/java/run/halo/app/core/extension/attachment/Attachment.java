@@ -1,9 +1,11 @@
 package run.halo.app.core.extension.attachment;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
 import static run.halo.app.core.extension.attachment.Attachment.KIND;
 
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.util.Map;
 import java.util.Set;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -20,7 +22,7 @@ public class Attachment extends AbstractExtension {
 
     public static final String KIND = "Attachment";
 
-    @Schema(required = true)
+    @Schema(requiredMode = REQUIRED)
     private AttachmentSpec spec;
 
     private AttachmentStatus status;
@@ -56,8 +58,13 @@ public class Attachment extends AbstractExtension {
     @Data
     public static class AttachmentStatus {
 
-        @Schema(description = "Permalink of attachment")
+        @Schema(description = """
+            Permalink of attachment.
+            If it is in local storage, the public URL will be set.
+            If it is in s3 storage, the Object URL will be set.
+            """)
         private String permalink;
 
+        private Map<String, String> thumbnails;
     }
 }

@@ -1,5 +1,6 @@
 package run.halo.app.core.extension.content;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
 import static org.apache.commons.lang3.ObjectUtils.defaultIfNull;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -30,7 +31,9 @@ public class Comment extends AbstractExtension {
 
     public static final String KIND = "Comment";
 
-    @Schema(required = true)
+    public static final String REQUIRE_SYNC_ON_STARTUP_INDEX_NAME = "requireSyncOnStartup";
+
+    @Schema(requiredMode = REQUIRED)
     private CommentSpec spec;
 
     @Schema
@@ -45,10 +48,11 @@ public class Comment extends AbstractExtension {
     }
 
     @Data
+    @ToString(callSuper = true)
     @EqualsAndHashCode(callSuper = true)
     public static class CommentSpec extends BaseCommentSpec {
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private Ref subjectRef;
 
         private Instant lastReadTime;
@@ -57,13 +61,13 @@ public class Comment extends AbstractExtension {
     @Data
     public static class BaseCommentSpec {
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private String raw;
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private String content;
 
-        @Schema(required = true)
+        @Schema(requiredMode = REQUIRED)
         private CommentOwner owner;
 
         private String userAgent;
@@ -77,19 +81,19 @@ public class Comment extends AbstractExtension {
          */
         private Instant creationTime;
 
-        @Schema(required = true, defaultValue = "0")
+        @Schema(requiredMode = REQUIRED, defaultValue = "0")
         private Integer priority;
 
-        @Schema(required = true, defaultValue = "false")
+        @Schema(requiredMode = REQUIRED, defaultValue = "false")
         private Boolean top;
 
-        @Schema(required = true, defaultValue = "true")
+        @Schema(requiredMode = REQUIRED, defaultValue = "true")
         private Boolean allowNotification;
 
-        @Schema(required = true, defaultValue = "false")
+        @Schema(requiredMode = REQUIRED, defaultValue = "false")
         private Boolean approved;
 
-        @Schema(required = true, defaultValue = "false")
+        @Schema(requiredMode = REQUIRED, defaultValue = "false")
         private Boolean hidden;
     }
 
@@ -98,11 +102,12 @@ public class Comment extends AbstractExtension {
         public static final String KIND_EMAIL = "Email";
         public static final String AVATAR_ANNO = "avatar";
         public static final String WEBSITE_ANNO = "website";
+        public static final String EMAIL_HASH_ANNO = "email-hash";
 
-        @Schema(required = true, minLength = 1)
+        @Schema(requiredMode = REQUIRED, minLength = 1)
         private String kind;
 
-        @Schema(required = true, maxLength = 64)
+        @Schema(requiredMode = REQUIRED, maxLength = 64)
         private String name;
 
         private String displayName;
@@ -113,6 +118,10 @@ public class Comment extends AbstractExtension {
         @JsonIgnore
         public String getAnnotation(String key) {
             return annotations == null ? null : annotations.get(key);
+        }
+
+        public static String ownerIdentity(String kind, String name) {
+            return kind + "#" + name;
         }
     }
 
@@ -128,6 +137,12 @@ public class Comment extends AbstractExtension {
         private Integer unreadReplyCount;
 
         private Boolean hasNewReply;
+
+        private Long observedVersion;
+    }
+
+    public static String toSubjectRefKey(Ref subjectRef) {
+        return subjectRef.getGroup() + "/" + subjectRef.getKind() + "/" + subjectRef.getName();
     }
 
     public static int getUnreadReplyCount(List<Reply> replies, Instant lastReadTime) {

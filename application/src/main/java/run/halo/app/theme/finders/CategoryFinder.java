@@ -28,4 +28,8 @@ public interface CategoryFinder {
     Flux<CategoryTreeVo> listAsTree();
 
     Flux<CategoryTreeVo> listAsTree(String name);
+
+    Mono<CategoryVo> getParentByName(String name);
+
+    Flux<CategoryVo> getBreadcrumbs(String name);
 }

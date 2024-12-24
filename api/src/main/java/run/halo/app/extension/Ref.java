@@ -1,8 +1,11 @@
 package run.halo.app.extension;
 
+import static io.swagger.v3.oas.annotations.media.Schema.RequiredMode.REQUIRED;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.Objects;
 import lombok.Data;
+import org.springframework.lang.NonNull;
 
 @Data
 @Schema(description = "Extension reference object. The name is mandatory")
@@ -17,7 +20,7 @@ public class Ref {
     @Schema(description = "Extension kind")
     private String kind;
 
-    @Schema(required = true, description = "Extension name. This field is mandatory")
+    @Schema(requiredMode = REQUIRED, description = "Extension name. This field is mandatory")
     private String name;
 
     public static Ref of(String name) {
@@ -57,4 +60,18 @@ public class Ref {
         return Objects.equals(ref.getGroup(), gvk.group())
             && Objects.equals(ref.getKind(), gvk.kind());
     }
+
+    /**
+     * Check if the extension is equal to the ref.
+     *
+     * @param ref must not be null.
+     * @param extension must not be null.
+     * @return true if they are equal; false otherwise.
+     */
+    public static boolean equals(@NonNull Ref ref, @NonNull ExtensionOperator extension) {
+        var gvk = extension.groupVersionKind();
+        var name = extension.getMetadata().getName();
+        return groupKindEquals(ref, gvk) && Objects.equals(ref.getName(), name);
+    }
+
 }
